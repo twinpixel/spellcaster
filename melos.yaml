@@ -1,0 +1,13 @@
+name: spellcaster
+repository: https://github.com/example/spellcaster
+
+packages:
+  - packages/**
+
+command:
+  bootstrap:
+    runPubGetInParallel: true
+  test:
+    run: dart test
+    packageFilters:
+      dirExists: test
