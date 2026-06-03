@@ -14,5 +14,15 @@ void main() {
       right: ' ',
     );
     expect(partial.pendingTurn, isNotNull);
+
+    final resolved = svc.submitTurn(
+      g.id,
+      playerId: 'b',
+      left: ' ',
+      right: ' ',
+    );
+    expect(resolved.pendingTurn, isNull);
+    expect(resolved.lastTurnCasts, isNotEmpty);
+    expect(resolved.lastTurnCasts.first['spell'], 'shield');
   });
 }

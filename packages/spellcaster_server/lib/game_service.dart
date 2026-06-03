@@ -14,6 +14,7 @@ class GameSnapshot {
     this.winnerId,
     this.isDraw = false,
     this.pendingTurn,
+    this.lastTurnCasts = const [],
   });
 
   final String id;
@@ -24,6 +25,7 @@ class GameSnapshot {
   final Map<String, dynamic> players;
   final Map<String, dynamic> rules;
   final Map<String, dynamic>? pendingTurn;
+  final List<Map<String, dynamic>> lastTurnCasts;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -34,6 +36,7 @@ class GameSnapshot {
         'players': players,
         'rules': rules,
         if (pendingTurn != null) 'pendingTurn': pendingTurn,
+        if (lastTurnCasts.isNotEmpty) 'lastTurnCasts': lastTurnCasts,
       };
 }
 
@@ -44,6 +47,7 @@ class _GameRoom {
   final GameState state;
   final GameEngine engine;
   final Map<String, TurnAction?> submitted = {};
+  List<Map<String, dynamic>> lastTurnCasts = [];
 }
 
 class GameService {
@@ -90,6 +94,7 @@ class GameService {
 
     final action = _parseTurn(left, right);
     room.submitted[playerId] = action;
+    room.lastTurnCasts = [];
 
     final ids = [room.state.wizardA.id, room.state.wizardB.id];
     if (!room.submitted.containsKey(ids[0]) || !room.submitted.containsKey(ids[1])) {
@@ -102,7 +107,7 @@ class GameService {
 
     final leftA = _parseSpell(leftSpell);
     final rightA = _parseSpell(rightSpell);
-    room.engine.playTurn(
+    final result = room.engine.playTurn(
       room.state,
       actionA: a,
       actionB: b,
@@ -111,6 +116,10 @@ class GameService {
       leftChoiceB: ids[1] == room.state.wizardB.id ? leftA : null,
       rightChoiceB: ids[1] == room.state.wizardB.id ? rightA : null,
     );
+    room.lastTurnCasts = [
+      ...result.castsA.map(_castJson),
+      ...result.castsB.map(_castJson),
+    ];
 
     return _snapshot(room);
   }
@@ -170,8 +179,16 @@ class GameService {
       pendingTurn: room.submitted.isEmpty
           ? null
           : {'waiting': room.submitted.keys.toList()},
+      lastTurnCasts: List<Map<String, dynamic>>.from(room.lastTurnCasts),
     );
   }
+
+  Map<String, dynamic> _castJson(CastSpell c) => {
+        'spell': c.spell.name,
+        'casterId': c.casterId,
+        'targetId': c.targetId,
+        'handIndex': c.handIndex,
+      };
 
   Map<String, dynamic> _wizardJson(Wizard w) => {
         'id': w.id,
