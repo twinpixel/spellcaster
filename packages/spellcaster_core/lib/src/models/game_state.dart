@@ -1,3 +1,4 @@
+import '../game_rules.dart';
 import 'wizard.dart';
 
 /// Full duel state for two wizards.
@@ -5,6 +6,7 @@ class GameState {
   GameState({
     required this.wizardA,
     required this.wizardB,
+    this.rules = GameRules.standard,
     this.turn = 0,
     this.finished = false,
     this.winnerId,
@@ -13,6 +15,7 @@ class GameState {
 
   final Wizard wizardA;
   final Wizard wizardB;
+  final GameRules rules;
   int turn;
   bool finished;
   String? winnerId;

@@ -1,6 +1,8 @@
 /// Spellcaster (Waving Hands) — shared rules engine.
 library spellcaster_core;
 
+export 'src/charm_person.dart';
+export 'src/game_rules.dart';
 export 'src/gesture.dart';
 export 'src/hand_buffer.dart';
 export 'src/models/game_state.dart';

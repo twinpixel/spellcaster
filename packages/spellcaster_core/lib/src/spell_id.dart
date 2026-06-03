@@ -1,3 +1,5 @@
+import 'spell_catalog.dart';
+
 /// All named spells from the official Spellcaster / Waving Hands rules.
 enum SpellId {
   // Protection

@@ -1,3 +1,9 @@
+# Monorepo / Flutter
+**/build/
+**/.dart_tool/
+.idea/
+*.iml
+
 # See https://www.dartlang.org/guides/libraries/private-files
 
 # Files and directories created by pub

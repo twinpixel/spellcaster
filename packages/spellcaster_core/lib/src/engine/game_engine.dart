@@ -1,3 +1,6 @@
+import '../charm_person.dart';
+import '../game_rules.dart';
+import '../gesture.dart';
 import '../models/game_state.dart';
 import '../models/turn_action.dart';
 import '../models/wizard.dart';
@@ -6,20 +9,26 @@ import 'turn_resolver.dart';
 
 /// High-level duel controller: pre-battle setup and turn submission.
 class GameEngine {
-  GameEngine({TurnResolver? resolver})
-      : _resolver = resolver ?? TurnResolver();
+  GameEngine({TurnResolver? resolver, GameRules rules = GameRules.standard})
+      : _resolver = resolver ?? TurnResolver(),
+        _rules = rules;
 
   final TurnResolver _resolver;
+  final GameRules _rules;
+
+  GameRules get rules => _rules;
 
   GameState newGame({
     required String nameA,
     required String nameB,
     String idA = 'a',
     String idB = 'b',
+    GameRules? rules,
   }) {
     final state = GameState(
       wizardA: Wizard(id: idA, name: nameA),
       wizardB: Wizard(id: idB, name: nameB),
+      rules: rules ?? _rules,
     );
     _applyPreBattleDispel(state);
     return state;
@@ -79,6 +88,11 @@ class GameEngine {
       castsA: castsA,
       castsB: castsB,
     );
+  }
+
+  /// Validates a charm-person forced gesture for [state.rules].
+  void validateCharmPersonGesture(GameState state, HandAction forced) {
+    CharmPersonRules.validateForcedAction(forced, state.rules);
   }
 
   void _checkWinner(GameState state, TurnAction a, TurnAction b) {

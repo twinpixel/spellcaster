@@ -30,6 +30,14 @@ class HandBuffer {
 
   void clear() => _symbols.clear();
 
+  void recordSingle(Gesture gesture) =>
+      _symbols.add(SingleHandSymbol(gesture));
+
+  void recordClap() => _symbols.add(const ClapSymbol());
+
+  void recordBoth(Gesture gesture) =>
+      _symbols.add(BothHandsSymbol(gesture));
+
   /// Records this hand's contribution for a turn (after turn-level clap/both resolved).
   void recordFromAction(HandAction action, TurnAction turn) {
     if (action.kind == HandActionKind.stab ||

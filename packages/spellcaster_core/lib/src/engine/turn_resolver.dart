@@ -37,8 +37,8 @@ class TurnResolver {
 
   List<CastSpell> detectCasts(
     Wizard wizard, {
-    required SpellId? leftChoice,
-    required SpellId? rightChoice,
+    SpellId? leftChoice,
+    SpellId? rightChoice,
   }) {
     final leftMatches = _matcher.matchHand(wizard.leftHand, handIndex: 0);
     final rightMatches = _matcher.matchHand(wizard.rightHand, handIndex: 1);
