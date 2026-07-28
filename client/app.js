@@ -523,6 +523,22 @@ function targetOptions() {
   return opts;
 }
 
+/** Bersagli tipici per attacchi (stab / mostri): avversario + creature vive. */
+function attackTargetOptions() {
+  const g = state.game;
+  if (!g) return [];
+  const other = oppId();
+  const opts = [{ id: other, label: playerName(other, g) }];
+  for (const m of g.monsters || []) {
+    if (!m.alive) continue;
+    opts.push({
+      id: m.id,
+      label: `${m.label} (${playerName(m.controllerId, g)}) ${m.hp}/${m.maxHp}`,
+    });
+  }
+  return opts;
+}
+
 function ensureDefaultTargets() {
   const other = oppId();
   if (!state.stabTarget) state.stabTarget = other;
@@ -550,7 +566,7 @@ function oppStatus() {
 }
 
 function statusBadges(st, { mine = false } = {}) {
-  if (!st) return '';
+  if (!st) return '<div class="status-badges" aria-hidden="true"></div>';
   const badges = [];
   if (st.resistHeat) badges.push(['Resist heat', 'ok']);
   if (st.resistCold) badges.push(['Resist cold', 'ok']);
@@ -569,7 +585,6 @@ function statusBadges(st, { mine = false } = {}) {
   if (st.delayedBank) badges.push([`Banca: ${st.delayedBank.spell}`, 'ok']);
   if (st.permanencyArmed > 0) badges.push([`Permanency ${st.permanencyArmed}`, 'ok']);
   if (st.antiSpellNextTurn) badges.push(['Anti-spell', 'warn']);
-  if (!badges.length) return '';
   return `<div class="status-badges">${badges.map(([t, k]) => `<span class="sbadge ${k}">${escapeHtml(t)}</span>`).join('')}</div>`;
 }
 
@@ -980,33 +995,42 @@ function renderTargetSelect(id, value, opts) {
 function collectTurnPrompts() {
   ensureDefaultTargets();
   const prompts = [];
-  const opts = targetOptions();
+  const attackOpts = attackTargetOptions();
   const monsters = myMonsters();
   const hasStab = state.left === 'stab' || state.right === 'stab'
     || state.left2 === 'stab' || state.right2 === 'stab';
   const st = myStatus();
 
-  for (const m of monsters) {
-    prompts.push({
-      kind: 'monster',
-      id: `mt-${m.id}`,
-      monsterId: m.id,
-      label: `Dove attacca ${m.label}?`,
-      type: 'target',
-      value: state.monsterTargets[m.id],
-      opts,
-    });
-  }
+  // Un solo bersaglio → default automatico, niente domanda
+  const needsTargetPick = attackOpts.length > 1;
 
-  if (hasStab) {
-    prompts.push({
-      kind: 'stab',
-      id: 'stab-target',
-      label: 'Stab verso chi?',
-      type: 'target',
-      value: state.stabTarget,
-      opts,
-    });
+  if (needsTargetPick) {
+    for (const m of monsters) {
+      prompts.push({
+        kind: 'monster',
+        id: `mt-${m.id}`,
+        monsterId: m.id,
+        label: `Dove attacca ${m.label}?`,
+        type: 'target',
+        value: state.monsterTargets[m.id],
+        opts: attackOpts,
+      });
+    }
+
+    if (hasStab) {
+      prompts.push({
+        kind: 'stab',
+        id: 'stab-target',
+        label: 'Stab verso chi?',
+        type: 'target',
+        value: state.stabTarget,
+        opts: attackOpts,
+      });
+    }
+  } else if (attackOpts.length === 1) {
+    const only = attackOpts[0].id;
+    if (hasStab) state.stabTarget = only;
+    for (const m of monsters) state.monsterTargets[m.id] = only;
   }
 
   if (controllingCharm()) {
@@ -1014,14 +1038,18 @@ function collectTurnPrompts() {
       if (o.code === ' ') return !!state.game?.rules?.allowCharmNothing;
       return true;
     }).map((o) => ({ id: o.code, label: o.title }));
-    prompts.push({
-      kind: 'charmForced',
-      id: 'charm-forced',
-      label: `Che gesto imponi a ${playerName(oppId())}?`,
-      type: 'select',
-      value: state.charmForced,
-      opts: forcedOpts,
-    });
+    if (forcedOpts.length > 1) {
+      prompts.push({
+        kind: 'charmForced',
+        id: 'charm-forced',
+        label: `Che gesto imponi a ${playerName(oppId())}?`,
+        type: 'select',
+        value: state.charmForced,
+        opts: forcedOpts,
+      });
+    } else if (forcedOpts.length === 1) {
+      state.charmForced = forcedOpts[0].id;
+    }
   }
 
   if (st.delayedBank) {
@@ -1034,7 +1062,7 @@ function collectTurnPrompts() {
     });
   }
 
-  // Clap su entrambe → possibile elemental: chiedi tipo
+  // Clap su entrambe → possibile elemental: chiedi tipo (2 scelte)
   if (state.left === 'C' && state.right === 'C') {
     prompts.push({
       kind: 'elemental',
@@ -1155,8 +1183,10 @@ function renderEffectHints() {
   if (st.paralysis) hints.push(`Paralisi: la mano ${st.paralysis.hand === 'right' ? 'destra' : 'sinistra'} verrà rimappata.`);
   if (st.hasteTurns > 0) hints.push('Haste: puoi fare una seconda coppia di gesti.');
   if (state.game?.extraTurnFor === state.playerId) hints.push('Time stop: turno extra solo per te.');
-  if (!hints.length) return '';
-  return `<ul class="effect-hints">${hints.map((h) => `<li>${escapeHtml(h)}</li>`).join('')}</ul>`;
+  if (!hints.length) {
+    return `<div class="notice-slot" aria-hidden="true"></div>`;
+  }
+  return `<div class="notice-slot"><ul class="effect-hints">${hints.map((h) => `<li>${escapeHtml(h)}</li>`).join('')}</ul></div>`;
 }
 
 function renderDuel() {
@@ -1191,7 +1221,11 @@ function renderDuel() {
       ? `<p class="status">In attesa che ${escapeHtml(playerName(otherId))} apra il link…</p>`
       : g.extraTurnFor === state.playerId
         ? `<p class="status wait">Time stop — turno extra di ${escapeHtml(me.name)}</p>`
-        : '');
+        : `<p class="status status-empty">&nbsp;</p>`);
+
+  const actionNote = state.left == null || state.right == null || (haste && (state.left2 == null || state.right2 == null))
+    ? 'Seleziona tutte le mani richieste prima di inviare.'
+    : (state.error ? state.error : '');
 
   app.innerHTML = `
     ${finished}
@@ -1208,9 +1242,9 @@ function renderDuel() {
         ${statusBadges(opp.status)}
       </div>
     </div>
-    ${renderMonstersScore()}
+    <div class="monsters-slot">${renderMonstersScore() || ''}</div>
     <p class="meta">Turno ${g.turn}${g.extraTurnFor ? ' · time stop' : ''}</p>
-    ${status}
+    <div class="status-slot">${status}</div>
     ${renderEffectHints()}
     ${g.finished ? '' : `
       <p class="hint">Scegli i gesti, poi Fine turno</p>
@@ -1218,21 +1252,20 @@ function renderDuel() {
         ${renderHand('Mano sinistra', 'left')}
         ${renderHand('Mano destra', 'right')}
       </div>
-      ${haste ? `
-        <p class="hint haste-hint">Seconda coppia (Haste)</p>
-        <div class="hands-row haste-row">
-          ${renderHand('Haste SX', 'left2')}
-          ${renderHand('Haste DX', 'right2')}
-        </div>
-      ` : ''}
+      <div class="haste-slot ${haste ? 'active' : ''}">
+        ${haste ? `
+          <p class="hint haste-hint">Seconda coppia (Haste)</p>
+          <div class="hands-row haste-row">
+            ${renderHand('Haste SX', 'left2')}
+            ${renderHand('Haste DX', 'right2')}
+          </div>
+        ` : ''}
+      </div>
       <div class="actions">
         <button class="btn btn-primary" id="btn-end" ${canSubmit ? '' : 'disabled'}>
           ${state.loading ? 'Invio…' : state.waitingSubmit ? 'In attesa…' : 'Fine turno'}
         </button>
-        ${state.left == null || state.right == null || (haste && (state.left2 == null || state.right2 == null))
-          ? '<p class="meta">Seleziona tutte le mani richieste prima di inviare.</p>'
-          : ''}
-        ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
+        <p class="action-note ${state.error ? 'error' : ''}">${actionNote ? escapeHtml(actionNote) : '&nbsp;'}</p>
       </div>
     `}
     ${renderHistory()}
