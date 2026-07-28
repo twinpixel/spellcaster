@@ -1,7 +1,19 @@
 /**
  * Spellcaster core — gesti, buffer mani, catalogo, matching, room service.
  * Inlined nel worker da server/build.js (export rimossi).
+ * Dipende da server/status.js (inlinato prima).
  */
+
+import {
+  emptyStatus,
+  clearEnchantments,
+  statusJson,
+  applyPreTurnConstraints,
+  tickEndOfTurn,
+  MIND_GROUP,
+  ENCHANTMENT_SPELLS,
+  PERMANENCY_EXCLUDED,
+} from './status.js';
 
 export const WIZARD_MAX_DAMAGE = 14;
 
@@ -244,6 +256,19 @@ const DAMAGING_SPELLS = new Set([
   'fireball',
 ]);
 
+const OFFENSIVE_ENCHANTMENTS = new Set([
+  'amnesia',
+  'confusion',
+  'charmPerson',
+  'charmMonster',
+  'paralysis',
+  'fear',
+  'antiSpell',
+  'disease',
+  'poison',
+  'blindness',
+]);
+
 const SUMMON_SPELLS = {
   summonGoblin: { type: 'goblin', label: 'Goblin', attack: 1, hp: 1 },
   summonOgre: { type: 'ogre', label: 'Ogre', attack: 2, hp: 2 },
@@ -254,6 +279,7 @@ const SUMMON_SPELLS = {
 
 function defaultTarget(spell, casterId, foeId) {
   if (DAMAGING_SPELLS.has(spell) || spell === 'fireStorm' || spell === 'iceStorm') return foeId;
+  if (OFFENSIVE_ENCHANTMENTS.has(spell)) return foeId;
   if (SUMMON_SPELLS[spell]) return casterId; // subject = controller
   return casterId;
 }
@@ -368,10 +394,38 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     });
   }
 
+  // Begin-of-resolution: pending paralysis on monsters activates this turn
+  for (const m of state.monsters || []) {
+    if (m.paralyzedPending) {
+      m.paralyzed = true;
+      m.paralyzedPending = false;
+    }
+  }
+
   const all = [
     ...withTargets(castsA, choices.spellTargetA, state.wizardA.id),
     ...withTargets(castsB, choices.spellTargetB, state.wizardB.id),
   ];
+
+  // Release banked delayed spells into this turn's cast list
+  for (const [casterId, release] of [
+    [state.wizardA.id, choices.releaseDelayedA],
+    [state.wizardB.id, choices.releaseDelayedB],
+  ]) {
+    if (!release) continue;
+    const caster = wizardById(state, casterId);
+    const bank = caster?.status.delayedBank;
+    if (!bank) continue;
+    all.push({
+      spell: bank.spell,
+      casterId,
+      targetId: bank.targetId,
+      handIndex: bank.handIndex ?? 0,
+      fromBank: true,
+    });
+    caster.status.delayedBank = null;
+  }
+
   const active = all.map((c) => ({ ...c, cancelled: false }));
 
   const hasDispel = active.some((c) => c.spell === 'dispelMagic' && !c.cancelled);
@@ -395,10 +449,87 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
   );
   for (const c of active) {
     if (c.cancelled) continue;
-    if (!['missile', 'lightningBoltLong', 'lightningBoltShort'].includes(c.spell)) continue;
-    if (isWizardId(c.targetId) && mirrored.has(c.targetId) && !countered.has(c.targetId)) {
+    // Mirror reflects pointed spells (not storms / summons / stabs)
+    const reflectable = DAMAGING_SPELLS.has(c.spell) || c.spell === 'fingerOfDeath'
+      || ENCHANTMENT_SPELLS.has(c.spell);
+    if (!reflectable) continue;
+    if (c.spell === 'fireStorm' || c.spell === 'iceStorm') continue;
+    if (isWizardId(c.targetId) && mirrored.has(c.targetId) && !countered.has(c.targetId) && !hasDispel) {
+      // No mirror if counter/dispel on subject
+      if (countered.has(c.targetId)) continue;
       c.targetId = c.casterId;
     }
+  }
+
+  // Incompatible mind-control group: ≥2 on same subject → all cancel
+  const mindByTarget = new Map();
+  for (const c of active) {
+    if (c.cancelled || !MIND_GROUP.has(c.spell) || !isWizardId(c.targetId)) continue;
+    if (!mindByTarget.has(c.targetId)) mindByTarget.set(c.targetId, []);
+    mindByTarget.get(c.targetId).push(c);
+  }
+  for (const [, list] of mindByTarget) {
+    if (list.length >= 2) for (const c of list) c.cancelled = true;
+  }
+
+  // Fire storm ↔ ice storm cancel each other
+  const fireStorm = active.some((c) => c.spell === 'fireStorm' && !c.cancelled);
+  const iceStorm = active.some((c) => c.spell === 'iceStorm' && !c.cancelled);
+  if (fireStorm && iceStorm) {
+    for (const c of active) {
+      if (c.spell === 'fireStorm' || c.spell === 'iceStorm') c.cancelled = true;
+    }
+  }
+  // Fireball vs ice storm on same subject → both cancel for that subject
+  for (const c of active) {
+    if (c.cancelled || c.spell !== 'fireball') continue;
+    if (active.some((x) => !x.cancelled && x.spell === 'iceStorm')) {
+      c.cancelled = true;
+    }
+  }
+
+  // Finger of death ↔ Raise dead on same subject cancel
+  for (const c of active) {
+    if (c.cancelled || c.spell !== 'fingerOfDeath') continue;
+    const raise = active.find(
+      (x) => !x.cancelled && x.spell === 'raiseDead' && x.targetId === c.targetId,
+    );
+    if (raise) {
+      c.cancelled = true;
+      raise.cancelled = true;
+    }
+  }
+
+  // Delayed effect: next non-delayed spell by caster is banked
+  for (const c of active) {
+    if (c.cancelled) continue;
+    if (c.spell === 'delayedEffect' || c.spell === 'permanency') continue;
+    const caster = wizardById(state, c.casterId);
+    if (!caster?.status.delayedArmed) continue;
+    if (caster.status.delayedBank) continue;
+    caster.status.delayedBank = {
+      spell: c.spell,
+      targetId: c.targetId,
+      handIndex: c.handIndex,
+    };
+    caster.status.delayedArmed = 0;
+    c.cancelled = true;
+    c.banked = true;
+  }
+
+  // Permanency: next eligible enchantment sticks
+  for (const c of active) {
+    if (c.cancelled || !ENCHANTMENT_SPELLS.has(c.spell)) continue;
+    if (PERMANENCY_EXCLUDED.has(c.spell)) continue;
+    if (c.spell === 'permanency' || c.spell === 'delayedEffect') continue;
+    const caster = wizardById(state, c.casterId);
+    if (!caster?.status.permanencyArmed) continue;
+    const subject = isWizardId(c.targetId) ? wizardById(state, c.targetId) : null;
+    if (subject) {
+      subject.status.permanent = subject.status.permanent || [];
+      if (!subject.status.permanent.includes(c.spell)) subject.status.permanent.push(c.spell);
+    }
+    caster.status.permanencyArmed = 0;
   }
 
   const shielded = new Set();
@@ -486,21 +617,29 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         if (targetWizard) applyCure(targetWizard, 1);
         break;
       case 'cureHeavyWounds':
-        if (targetWizard) applyCure(targetWizard, 2);
+        if (targetWizard) {
+          applyCure(targetWizard, 2);
+          targetWizard.status.diseaseTurns = 0;
+        }
         break;
       case 'raiseDead':
         if (targetWizard) {
-          if (targetWizard.damage > WIZARD_MAX_DAMAGE) targetWizard.damage = 0;
-          else applyCure(targetWizard, 5);
+          if (targetWizard.damage > WIZARD_MAX_DAMAGE) {
+            targetWizard.damage = 0;
+            clearEnchantments(targetWizard);
+          } else {
+            applyCure(targetWizard, 5);
+          }
+        } else {
+          const m = monsterById(state, c.targetId);
+          if (m && !m.alive) {
+            m.alive = true;
+            m.hp = m.maxHp;
+          }
         }
         break;
       case 'resistHeat':
         if (targetWizard) targetWizard.status.resistHeat = true;
-        for (const m of livingMonsters(state)) {
-          if (m.elementalType === 'fire' && m.controllerId !== c.casterId) {
-            // resist heat on caster destroys opposing fire elemental if targeted? rules: on fire elemental destroys it when cast on it
-          }
-        }
         if (!isWizardId(c.targetId)) {
           const m = monsterById(state, c.targetId);
           if (m?.elementalType === 'fire') hurtMonster(m, 999);
@@ -523,13 +662,89 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         if (targetWizard) targetWizard.status.antiSpellNextTurn = true;
         break;
       case 'removeEnchantment':
+        if (targetWizard) clearEnchantments(targetWizard);
         if (!isWizardId(c.targetId)) {
           const m = monsterById(state, c.targetId);
-          if (m?.alive) {
-            // still attacks this turn
-            m._dieAfterAttack = true;
-          }
+          if (m?.alive) m._dieAfterAttack = true;
         }
+        break;
+      case 'dispelMagic':
+        destroyAllMonstersAfterAttack = true;
+        for (const w of [state.wizardA, state.wizardB]) clearEnchantments(w);
+        break;
+      case 'amnesia':
+        if (targetWizard) targetWizard.status.amnesia = true;
+        break;
+      case 'confusion':
+        if (targetWizard) targetWizard.status.confusion = true;
+        else {
+          const m = monsterById(state, c.targetId);
+          if (m) m.confused = true;
+        }
+        break;
+      case 'charmPerson':
+        if (targetWizard) {
+          const hand =
+            c.casterId === state.wizardA.id
+              ? (choices.charmHandA || 'left')
+              : (choices.charmHandB || 'left');
+          targetWizard.status.charmPerson = { controllerId: c.casterId, hand };
+        }
+        break;
+      case 'charmMonster': {
+        const m = monsterById(state, c.targetId);
+        if (m?.alive && !m.elementalType) m.controllerId = c.casterId;
+        break;
+      }
+      case 'paralysis':
+        if (targetWizard) {
+          const hand =
+            c.casterId === state.wizardA.id
+              ? (choices.paralysisHandA || 'left')
+              : (choices.paralysisHandB || 'left');
+          targetWizard.status.paralysis = { hand };
+        } else {
+          const m = monsterById(state, c.targetId);
+          if (m) m.paralyzedPending = true;
+        }
+        break;
+      case 'fear':
+        if (targetWizard) targetWizard.status.fear = true;
+        break;
+      case 'disease':
+        if (targetWizard) targetWizard.status.diseaseTurns = 6;
+        break;
+      case 'poison':
+        if (targetWizard) targetWizard.status.poisonTurns = 6;
+        break;
+      case 'blindness':
+        if (targetWizard) targetWizard.status.blindnessTurns = 3;
+        else {
+          const m = monsterById(state, c.targetId);
+          if (m?.alive) m._dieAfterAttack = true;
+        }
+        break;
+      case 'invisibility':
+        if (targetWizard) targetWizard.status.invisibilityTurns = 3;
+        else {
+          const m = monsterById(state, c.targetId);
+          if (m?.alive) m._dieAfterAttack = true;
+        }
+        break;
+      case 'haste':
+        if (targetWizard) targetWizard.status.hasteQueued = 3;
+        break;
+      case 'timeStop':
+        if (targetWizard) state.timeStopFor = targetWizard.id;
+        break;
+      case 'delayedEffect':
+        if (caster) {
+          caster.status.delayedArmed = 3;
+          caster.status.delayedBank = null;
+        }
+        break;
+      case 'permanency':
+        if (caster) caster.status.permanencyArmed = 3;
         break;
       case 'summonGoblin':
       case 'summonOgre':
@@ -537,9 +752,6 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       case 'summonGiant':
       case 'summonElemental':
         pendingSummons.push(c);
-        break;
-      case 'dispelMagic':
-        destroyAllMonstersAfterAttack = true;
         break;
       default:
         break;
@@ -577,12 +789,34 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
 
   // Monster attacks (existing + newly summoned), then apply delayed deaths
   for (const m of [...livingMonsters(state)]) {
+    if (m.paralyzed) {
+      monsterLog[m.id] = { label: m.label, text: 'paralisi' };
+      m.paralyzed = false;
+      continue;
+    }
+
     const orders =
       m.controllerId === state.wizardA.id ? choices.monsterOrdersA : choices.monsterOrdersB;
     let targetId = orderTarget(orders, m.id, m.controllerId);
     // Newly summoned without explicit order: attack opponent of controller
     if (newMonsters.includes(m) && !(orders || []).some((o) => o.monsterId === m.id)) {
       targetId = foe(m.controllerId);
+    }
+
+    if (m.confused) {
+      const opts = [state.wizardA.id, state.wizardB.id, ...livingMonsters(state).map((x) => x.id)]
+        .filter((id) => id !== m.id);
+      targetId = opts[Math.floor(Math.random() * opts.length)] || targetId;
+      m.confused = false;
+    }
+
+    // Invisible wizards cannot be targeted by opposing monsters
+    if (isWizardId(targetId)) {
+      const tw = wizardById(state, targetId);
+      if (tw?.status.invisibilityTurns > 0 && m.controllerId !== targetId) {
+        monsterLog[m.id] = { label: m.label, text: 'invis' };
+        continue;
+      }
     }
 
     // Elemental vs resist
@@ -644,16 +878,13 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
   resolveStab(actionA, state.wizardA.id, choices.stabTargetA);
   resolveStab(actionB, state.wizardB.id, choices.stabTargetB);
 
-  for (const w of [state.wizardA, state.wizardB]) {
-    if (w.status.protectionFromEvilTurns > 0) w.status.protectionFromEvilTurns -= 1;
-  }
-
   return {
-    casts: active.filter((c) => !c.cancelled).map((c) => ({
+    casts: active.filter((c) => !c.cancelled || c.banked).map((c) => ({
       spell: c.spell,
       casterId: c.casterId,
       targetId: c.targetId,
       handIndex: c.handIndex,
+      banked: !!c.banked,
     })),
     monsterLog,
   };
@@ -667,12 +898,7 @@ function createWizard(id, name) {
     leftHand: emptyHand(),
     rightHand: emptyHand(),
     usedShortLightning: false,
-    status: {
-      antiSpellNextTurn: false,
-      resistHeat: false,
-      resistCold: false,
-      protectionFromEvilTurns: 0,
-    },
+    status: emptyStatus(),
   };
 }
 
@@ -711,6 +937,10 @@ export function playTurn(state, actionA, actionB, choices = {}) {
   state.turn += 1;
 
   for (const w of [state.wizardA, state.wizardB]) {
+    if (w.status.hasteQueued > 0) {
+      w.status.hasteTurns = w.status.hasteQueued;
+      w.status.hasteQueued = 0;
+    }
     if (w.status.antiSpellNextTurn) {
       w.leftHand.symbols = [];
       w.rightHand.symbols = [];
@@ -718,35 +948,96 @@ export function playTurn(state, actionA, actionB, choices = {}) {
     }
   }
 
-  if (isSurrender(actionA) && isSurrender(actionB)) {
+  // Clone actions so constraint rewrites don't mutate room submissions unexpectedly
+  const actA = {
+    left: { ...actionA.left },
+    right: { ...actionA.right },
+  };
+  const actB = {
+    left: { ...actionB.left },
+    right: { ...actionB.right },
+  };
+
+  const notesA = applyPreTurnConstraints(state.wizardA, actA, {
+    charmForced: choices.charmForcedA,
+    charmHand: choices.charmHandVictimA,
+  });
+  const notesB = applyPreTurnConstraints(state.wizardB, actB, {
+    charmForced: choices.charmForcedB,
+    charmHand: choices.charmHandVictimB,
+  });
+
+  if (isSurrender(actA) && isSurrender(actB)) {
     state.finished = true;
     state.isDraw = true;
     return { state, castsA: [], castsB: [], monsterLog: {}, surrendered: true, draw: true };
   }
 
-  if (!hasDoubleStab(actionA)) {
-    recordFromAction(state.wizardA.leftHand, actionA.left, actionA);
-    recordFromAction(state.wizardA.rightHand, actionA.right, actionA);
+  if (!hasDoubleStab(actA)) {
+    recordFromAction(state.wizardA.leftHand, actA.left, actA);
+    recordFromAction(state.wizardA.rightHand, actA.right, actA);
   }
-  if (!hasDoubleStab(actionB)) {
-    recordFromAction(state.wizardB.leftHand, actionB.left, actionB);
-    recordFromAction(state.wizardB.rightHand, actionB.right, actionB);
+  if (!hasDoubleStab(actB)) {
+    recordFromAction(state.wizardB.leftHand, actB.left, actB);
+    recordFromAction(state.wizardB.rightHand, actB.right, actB);
   }
 
-  // Attach per-hand spell targets onto cast detection choices via resolveEffects
-  const castsA = detectCasts(state.wizardA, choices.leftChoiceA, choices.rightChoiceA);
-  const castsB = detectCasts(state.wizardB, choices.leftChoiceB, choices.rightChoiceB);
+  let castsA = detectCasts(state.wizardA, choices.leftChoiceA, choices.rightChoiceA);
+  let castsB = detectCasts(state.wizardB, choices.leftChoiceB, choices.rightChoiceB);
+
+  // Haste: optional second gesture pair in the same turn
+  function applyHastePair(wizard, left2, right2, leftChoice, rightChoice, existing) {
+    if (!(wizard.status.hasteTurns > 0)) return existing;
+    if (left2 == null || right2 == null) return existing;
+    let extra;
+    try {
+      extra = parseTurn(left2, right2);
+    } catch {
+      return existing;
+    }
+    if (hasDoubleStab(extra)) return existing;
+    recordFromAction(wizard.leftHand, extra.left, extra);
+    recordFromAction(wizard.rightHand, extra.right, extra);
+    return [...existing, ...detectCasts(wizard, leftChoice, rightChoice)];
+  }
+  castsA = applyHastePair(
+    state.wizardA,
+    choices.left2A,
+    choices.right2A,
+    choices.leftChoice2A,
+    choices.rightChoice2A,
+    castsA,
+  );
+  castsB = applyHastePair(
+    state.wizardB,
+    choices.left2B,
+    choices.right2B,
+    choices.leftChoice2B,
+    choices.rightChoice2B,
+    castsB,
+  );
 
   const { casts: resolved, monsterLog } = resolveEffects(
     state,
     castsA,
     castsB,
-    actionA,
-    actionB,
+    actA,
+    actB,
     choices,
   );
   const resolvedA = resolved.filter((c) => c.casterId === state.wizardA.id);
   const resolvedB = resolved.filter((c) => c.casterId === state.wizardB.id);
+
+  state.wizardA.status.lastAction = { left: { ...actA.left }, right: { ...actA.right } };
+  state.wizardB.status.lastAction = { left: { ...actB.left }, right: { ...actB.right } };
+
+  tickEndOfTurn(state);
+
+  // Time stop: subject gets a solo extra turn next
+  if (state.timeStopFor) {
+    state.extraTurnFor = state.timeStopFor;
+    state.timeStopFor = null;
+  }
 
   const deadA = !wizardAlive(state.wizardA);
   const deadB = !wizardAlive(state.wizardB);
@@ -759,15 +1050,24 @@ export function playTurn(state, actionA, actionB, choices = {}) {
   } else if (deadB) {
     state.finished = true;
     state.winnerId = state.wizardA.id;
-  } else if (isSurrender(actionA)) {
+  } else if (isSurrender(actA)) {
     state.finished = true;
     state.winnerId = state.wizardB.id;
-  } else if (isSurrender(actionB)) {
+  } else if (isSurrender(actB)) {
     state.finished = true;
     state.winnerId = state.wizardA.id;
   }
 
-  return { state, castsA: resolvedA, castsB: resolvedB, monsterLog };
+  return {
+    state,
+    castsA: resolvedA,
+    castsB: resolvedB,
+    monsterLog,
+    notesA,
+    notesB,
+    actionA: actA,
+    actionB: actB,
+  };
 }
 
 function wizardJson(w) {
@@ -779,6 +1079,7 @@ function wizardJson(w) {
     usedShortLightning: w.usedShortLightning,
     leftGestures: w.leftHand.symbols.length,
     rightGestures: w.rightHand.symbols.length,
+    status: statusJson(w.status),
   };
 }
 
@@ -793,6 +1094,8 @@ function monsterJson(m) {
     maxHp: m.maxHp,
     alive: m.alive,
     elementalType: m.elementalType,
+    paralyzed: !!m.paralyzed,
+    confused: !!m.confused,
   };
 }
 
@@ -844,6 +1147,7 @@ export function snapshot(room) {
     finished: s.finished,
     winnerId: s.winnerId,
     isDraw: s.isDraw,
+    extraTurnFor: s.extraTurnFor || null,
     players: {
       [s.wizardA.id]: wizardJson(s.wizardA),
       [s.wizardB.id]: wizardJson(s.wizardB),
@@ -879,31 +1183,69 @@ export function submitTurnToRoom(room, payload = {}) {
     playerId,
     left,
     right,
+    left2,
+    right2,
     leftSpell,
     rightSpell,
     spellTargets,
     monsterOrders,
     stabTarget,
     elementalType,
+    charmForced,
+    charmHand,
+    paralysisHand,
+    releaseDelayed,
   } = payload;
 
   if (room.state.finished) throw new Error('game_finished');
   if (playerId !== 'a' && playerId !== 'b') throw new Error('invalid_player');
   if (room.submitted[playerId]) throw new Error('already_submitted');
 
+  const extraFor = room.state.extraTurnFor;
+  if (extraFor && playerId !== extraFor) {
+    throw new Error('time_stop_wait');
+  }
+
   const action = parseTurn(left, right);
   room.submitted[playerId] = {
     action,
+    left2: left2 ?? null,
+    right2: right2 ?? null,
     spellTargets: spellTargets || {},
     monsterOrders: monsterOrders || [],
     stabTarget: stabTarget || null,
     elementalType: elementalType || null,
     leftSpell: leftSpell || null,
     rightSpell: rightSpell || null,
+    charmForced: charmForced || null,
+    charmHand: charmHand || null,
+    paralysisHand: paralysisHand || null,
+    releaseDelayed: !!releaseDelayed,
   };
   room.lastTurnCasts = [];
   room.joined = room.joined || { a: false, b: false };
   room.joined[playerId] = true;
+
+  // Time-stop solo turn: only the subject submits; opponent auto-nothings
+  if (extraFor && playerId === extraFor) {
+    const other = extraFor === 'a' ? 'b' : 'a';
+    if (!room.submitted[other]) {
+      room.submitted[other] = {
+        action: parseTurn(' ', ' '),
+        spellTargets: {},
+        monsterOrders: [],
+        stabTarget: null,
+        elementalType: null,
+        leftSpell: null,
+        rightSpell: null,
+        charmForced: null,
+        charmHand: null,
+        paralysisHand: null,
+        releaseDelayed: false,
+      };
+    }
+    room.state.extraTurnFor = null;
+  }
 
   const ids = [room.state.wizardA.id, room.state.wizardB.id];
   if (!room.submitted[ids[0]] || !room.submitted[ids[1]]) {
@@ -913,6 +1255,20 @@ export function submitTurnToRoom(room, payload = {}) {
   const subA = room.submitted[ids[0]];
   const subB = room.submitted[ids[1]];
   room.submitted = {};
+
+  // Charm forced gesture: controller sends charmForced targeting the victim
+  const charmForcedA =
+    subB.charmForced && room.state.wizardA.status.charmPerson?.controllerId === 'b'
+      ? subB.charmForced
+      : subA.charmForced && room.state.wizardA.status.charmPerson?.controllerId === 'a'
+        ? subA.charmForced
+        : null;
+  const charmForcedB =
+    subA.charmForced && room.state.wizardB.status.charmPerson?.controllerId === 'a'
+      ? subA.charmForced
+      : subB.charmForced && room.state.wizardB.status.charmPerson?.controllerId === 'b'
+        ? subB.charmForced
+        : null;
 
   const result = playTurn(room.state, subA.action, subB.action, {
     leftChoiceA: subA.leftSpell,
@@ -927,14 +1283,26 @@ export function submitTurnToRoom(room, payload = {}) {
     stabTargetB: subB.stabTarget,
     elementalTypeA: subA.elementalType,
     elementalTypeB: subB.elementalType,
+    charmForcedA,
+    charmForcedB,
+    charmHandA: subA.charmHand,
+    charmHandB: subB.charmHand,
+    paralysisHandA: subA.paralysisHand,
+    paralysisHandB: subB.paralysisHand,
+    left2A: subA.left2,
+    right2A: subA.right2,
+    left2B: subB.left2,
+    right2B: subB.right2,
+    releaseDelayedA: subA.releaseDelayed,
+    releaseDelayedB: subB.releaseDelayed,
   });
   room.lastTurnCasts = [...result.castsA, ...result.castsB];
   room.history = room.history || [];
   room.history.push(
     historyEntry(
       room.state.turn,
-      subA.action,
-      subB.action,
+      result.actionA || subA.action,
+      result.actionB || subB.action,
       room.lastTurnCasts,
       result.monsterLog,
       room.state.monsterColumns,

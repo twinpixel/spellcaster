@@ -1,5 +1,5 @@
 /**
- * Genera dist/worker.js incorporando shared.js.
+ * Genera dist/worker.js incorporando status.js + shared.js.
  */
 import fs from 'fs/promises';
 import path from 'path';
@@ -12,11 +12,15 @@ const CLIENT_DIR = path.join(ROOT, 'client');
 const SW_PATH = path.join(CLIENT_DIR, 'sw.js');
 const SW_HASH_FILES = ['index.html', 'app.js', 'styles.css', 'manifest.webmanifest'];
 const TEMPLATE_PATH = path.join(__dirname, 'worker.template.js');
+const STATUS_PATH = path.join(__dirname, 'status.js');
 const SHARED_PATH = path.join(__dirname, 'shared.js');
 const OUTPUT_PATH = path.join(ROOT, 'dist', 'worker.js');
 
 function stripModuleSyntax(source) {
-  return source.replace(/^export\s+/gm, '').trim();
+  return source
+    .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
+    .replace(/^export\s+/gm, '')
+    .trim();
 }
 
 async function stampServiceWorker() {
@@ -41,12 +45,16 @@ async function stampServiceWorker() {
 }
 
 async function main() {
-  const [template, shared] = await Promise.all([
+  const [template, statusSrc, shared] = await Promise.all([
     fs.readFile(TEMPLATE_PATH, 'utf-8'),
+    fs.readFile(STATUS_PATH, 'utf-8'),
     fs.readFile(SHARED_PATH, 'utf-8'),
   ]);
 
   const dataBlock = [
+    '// --- inlined from server/status.js ---',
+    stripModuleSyntax(statusSrc),
+    '',
     '// --- inlined from server/shared.js ---',
     stripModuleSyntax(shared),
     '',

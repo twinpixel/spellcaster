@@ -98,12 +98,18 @@ export class GameRoom {
           playerId: body.playerId,
           left: body.left ?? ' ',
           right: body.right ?? ' ',
+          left2: body.left2,
+          right2: body.right2,
           leftSpell: body.leftSpell,
           rightSpell: body.rightSpell,
           spellTargets: body.spellTargets,
           monsterOrders: body.monsterOrders,
           stabTarget: body.stabTarget,
           elementalType: body.elementalType,
+          charmForced: body.charmForced,
+          charmHand: body.charmHand,
+          paralysisHand: body.paralysisHand,
+          releaseDelayed: body.releaseDelayed,
         });
         await this.save();
         return jsonResponse(snap);

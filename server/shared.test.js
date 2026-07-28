@@ -145,4 +145,59 @@ describe('GameService', () => {
     expect(after.monsterColumns.length).toBe(1);
     expect(after.history[0].monsters[after.monsterColumns[0].id].text).toMatch(/→/);
   });
+
+  it('amnesia forces repeat of previous gestures', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    // D-P-P amnesia on B
+    for (const g of ['D', 'P']) {
+      svc.submitTurn(snap.id, { playerId: 'a', left: g, right: ' ' });
+      svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    }
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'P', right: ' ', leftSpell: 'amnesia' });
+    let after = svc.submitTurn(snap.id, { playerId: 'b', left: 'W', right: 'S' });
+    expect(after.lastTurnCasts.some((c) => c.spell === 'amnesia')).toBe(true);
+    expect(after.players.b.status.amnesia).toBe(true);
+
+    // B tries different gestures; amnesia forces W/S
+    svc.submitTurn(snap.id, { playerId: 'a', left: ' ', right: ' ' });
+    after = svc.submitTurn(snap.id, { playerId: 'b', left: 'F', right: 'F' });
+    expect(after.history[0].b.left).toBe('W');
+    expect(after.history[0].b.right).toBe('S');
+    expect(after.players.b.status.amnesia).toBe(false);
+  });
+
+  it('fear forbids C D F S next turn', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    // S-W-D fear
+    for (const g of ['S', 'W']) {
+      svc.submitTurn(snap.id, { playerId: 'a', left: g, right: ' ' });
+      svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    }
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'D', right: ' ' });
+    let after = svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    expect(after.players.b.status.fear).toBe(true);
+
+    svc.submitTurn(snap.id, { playerId: 'a', left: ' ', right: ' ' });
+    after = svc.submitTurn(snap.id, { playerId: 'b', left: 'F', right: 'D' });
+    expect(after.history[0].b.left).toBe('—');
+    expect(after.history[0].b.right).toBe('—');
+  });
+
+  it('disease countdown kills after final tick', async () => {
+    const { tickEndOfTurn } = await import('./status.js');
+    const state = newGame();
+    state.wizardB.status.diseaseTurns = 1;
+    const deaths = tickEndOfTurn(state);
+    expect(deaths).toContain('b');
+    expect(state.wizardB.damage).toBe(15);
+  });
+
+  it('exposes status on snapshot players', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    expect(snap.players.a.status).toBeTruthy();
+    expect(snap.players.a.status.antiSpellNextTurn).toBe(true);
+  });
 });

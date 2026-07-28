@@ -184,8 +184,11 @@ html, body {
 
 .score-card .name {
   font-family: 'Cinzel', Georgia, serif;
-  font-size: 1rem;
-  margin: 4px 0;
+  font-size: 1.15rem;
+  margin: 0 0 4px;
+  color: var(--text);
+  line-height: 1.2;
+  word-break: break-word;
 }
 
 .score-card .hp {
@@ -760,4 +763,179 @@ html, body {
   color: var(--text);
   padding: 10px 12px;
   font: inherit;
+}
+
+.status-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.sbadge {
+  font-size: 0.65rem;
+  letter-spacing: 0.02em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  color: var(--text-soft);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.sbadge.ok {
+  border-color: rgba(109, 191, 138, 0.45);
+  color: var(--ok);
+}
+
+.sbadge.warn {
+  border-color: rgba(232, 195, 106, 0.5);
+  color: var(--accent);
+}
+
+.sbadge.bad {
+  border-color: rgba(224, 112, 112, 0.5);
+  color: var(--danger);
+}
+
+.effect-hints {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  list-style: none;
+  border-radius: 10px;
+  background: rgba(232, 195, 106, 0.08);
+  border: 1px solid rgba(232, 195, 106, 0.22);
+}
+
+.effect-hints li {
+  color: var(--text-soft);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0 0 4px;
+}
+
+.effect-hints li:last-child { margin-bottom: 0; }
+
+.gesture.locked {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+}
+
+.haste-hint {
+  margin-top: 14px;
+  color: var(--accent) !important;
+}
+
+.haste-row .hand-block {
+  border-color: rgba(232, 195, 106, 0.35);
+}
+
+.order-row.highlight {
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(232, 195, 106, 0.1);
+  border: 1px solid rgba(232, 195, 106, 0.28);
+}
+
+.order-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  color: var(--text-soft);
+  margin-top: 4px;
+}
+
+.score-card .hp {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 4px;
+}
+
+.score {
+  align-items: stretch;
+}
+
+.score-card {
+  min-height: 0;
+}
+
+.spell-section {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  margin: 16px 0 6px;
+  letter-spacing: 0.04em;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(8, 6, 12, 0.72);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  animation: modal-fade 0.18s ease;
+}
+
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  width: min(100%, 420px);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 14px 14px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+  animation: modal-up 0.22s ease;
+}
+
+@keyframes modal-up {
+  from { transform: translateY(18px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 1.05rem;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(55vh, 360px);
+  overflow-y: auto;
+}
+
+.modal-field {
+  margin-bottom: 8px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.modal-actions .btn {
+  flex: 1;
+}
+
+@media (min-width: 520px) {
+  .modal-backdrop {
+    align-items: center;
+  }
+  .modal-sheet {
+    border-radius: 16px;
+  }
 }

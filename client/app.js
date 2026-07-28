@@ -29,6 +29,8 @@ const state = {
   playerId: 'a',
   left: null,
   right: null,
+  left2: null,
+  right2: null,
   loading: false,
   error: null,
   spells: null,
@@ -41,6 +43,12 @@ const state = {
   spellTargetLeft: null,
   spellTargetRight: null,
   elementalType: 'fire',
+  charmHand: 'left',
+  paralysisHand: 'left',
+  charmForced: 'P',
+  releaseDelayed: false,
+  /** @type {{ queue: string[][], spell: string|null, self: boolean }|null} */
+  aiPlan: null,
 };
 
 let pollTimer = null;
@@ -230,7 +238,7 @@ async function refreshGame() {
       }
     }
     if (state.playerId === 'a' && !prevJoined && game.joined?.b) {
-      toast('L’avversario è entrato');
+      toast(`${state.game.players?.b?.name || 'Secondo giocatore'} è entrato`);
     }
     saveSession();
     render();
@@ -244,15 +252,22 @@ async function createGame({ solo = false } = {}) {
   if (!nick) return;
   state.loading = true;
   state.error = null;
+  state.aiPlan = null;
   render();
   try {
-    const game = await api('/games', {
+    let game = await api('/games', {
       method: 'POST',
       body: JSON.stringify({
         playerA: nick,
-        playerB: solo ? 'Avversario' : 'In attesa…',
+        playerB: solo ? 'IA' : '…',
       }),
     });
+    if (solo) {
+      game = await api(`/games/${encodeURIComponent(game.id)}/join`, {
+        method: 'POST',
+        body: JSON.stringify({ playerId: 'b', name: 'IA' }),
+      });
+    }
     state.game = game;
     state.playerId = 'a';
     state.solo = solo;
@@ -333,47 +348,243 @@ async function resumeSession() {
   }
 }
 
-async function autoPassOpponent(game) {
+/** Piano IA debole: spell facili, tanti pass/errori, niente combo letali. */
+const AI_WEAK_SPELLS = [
+  { id: 'shield', steps: [['P', ' ']] },
+  { id: 'missile', steps: [['S', ' '], ['D', ' ']] },
+  { id: 'causeLightWounds', steps: [['W', ' '], ['F', ' '], ['P', ' ']] },
+  { id: 'summonGoblin', steps: [['S', ' '], ['F', ' '], ['W', ' ']] },
+  { id: 'fear', steps: [['S', ' '], ['W', ' '], ['D', ' ']] },
+  { id: 'cureLightWounds', steps: [['D', ' '], ['F', ' '], ['W', ' ']], self: true },
+  { id: 'amnesia', steps: [['D', ' '], ['P', ' '], ['P', ' ']] },
+];
+
+const AI_GESTURES = ['F', 'P', 'S', 'W', 'D', ' '];
+
+function aiSleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function aiRandomPair() {
+  const left = AI_GESTURES[Math.floor(Math.random() * AI_GESTURES.length)];
+  let right = AI_GESTURES[Math.floor(Math.random() * AI_GESTURES.length)];
+  // evita resa accidentale troppo spesso
+  if (left === 'P' && right === 'P' && Math.random() < 0.85) right = ' ';
+  return { left, right };
+}
+
+function aiPickTurn(game) {
+  const aiId = 'b';
+  const humanId = 'a';
+  if (!state.aiPlan) state.aiPlan = { queue: [], spell: null, self: false };
+
+  const plan = state.aiPlan;
+  const st = game.players?.[aiId]?.status || {};
+
+  // Fear / amnesia: lascia al server; l’IA prova comunque gesti banali
+  if (!plan.queue.length) {
+    const roll = Math.random();
+    if (st.diseaseTurns > 0 || st.poisonTurns > 0 || (game.players[aiId]?.damage || 0) >= 8) {
+      // un po’ più incline a curarsi
+      if (Math.random() < 0.55) {
+        const cure = AI_WEAK_SPELLS.find((s) => s.id === 'cureLightWounds');
+        plan.queue = cure.steps.map((s) => [...s]);
+        plan.spell = cure.id;
+        plan.self = true;
+      }
+    } else if (roll < 0.28) {
+      return { left: ' ', right: ' ' };
+    } else if (roll < 0.38) {
+      return { left: 'stab', right: ' ', stabTarget: humanId };
+    } else if (roll < 0.52) {
+      return aiRandomPair();
+    } else {
+      const spell = AI_WEAK_SPELLS[Math.floor(Math.random() * AI_WEAK_SPELLS.length)];
+      plan.queue = spell.steps.map((s) => [...s]);
+      plan.spell = spell.id;
+      plan.self = !!spell.self;
+      // 15% di “sbagliare” il piano a metà: lascia coda corta
+      if (Math.random() < 0.15 && plan.queue.length > 1) {
+        plan.queue = plan.queue.slice(0, 1);
+        plan.spell = null;
+      }
+    }
+  }
+
+  if (!plan.queue.length) return { left: ' ', right: ' ' };
+
+  const step = plan.queue.shift();
+  const last = plan.queue.length === 0;
+  const payload = {
+    left: step[0],
+    right: step[1],
+  };
+  if (last && plan.spell) {
+    payload.leftSpell = plan.spell;
+    payload.spellTargets = {
+      left: plan.self ? aiId : humanId,
+      right: plan.self ? aiId : humanId,
+    };
+  }
+  // 10% confonde le mani
+  if (Math.random() < 0.1 && payload.left !== 'C') {
+    const t = payload.left;
+    payload.left = payload.right;
+    payload.right = t;
+  }
+
+  const monsters = (game.monsters || []).filter((m) => m.alive && m.controllerId === aiId);
+  if (monsters.length) {
+    payload.monsterOrders = monsters.map((m) => ({
+      monsterId: m.id,
+      targetId: humanId,
+    }));
+  }
+  if (payload.left === 'stab' || payload.right === 'stab') {
+    payload.stabTarget = humanId;
+  }
+  return payload;
+}
+
+async function autoPlayAi(game) {
   const pending = game?.pendingTurn;
   if (!pending?.waitingFor?.length) return game;
   const opponent = pending.waitingFor[0];
   if (opponent === state.playerId) return game;
+
+  await aiSleep(450 + Math.floor(Math.random() * 550));
+  const turn = aiPickTurn(game);
   return api(`/games/${encodeURIComponent(game.id)}/turn`, {
     method: 'POST',
-    body: JSON.stringify({ playerId: opponent, left: ' ', right: ' ' }),
+    body: JSON.stringify({ playerId: opponent, ...turn }),
   });
+}
+
+async function switchToAiOpponent() {
+  if (!state.game || state.solo) return;
+  state.loading = true;
+  state.error = null;
+  render();
+  try {
+    const game = await api(`/games/${encodeURIComponent(state.game.id)}/join`, {
+      method: 'POST',
+      body: JSON.stringify({ playerId: 'b', name: 'IA' }),
+    });
+    state.game = game;
+    state.solo = true;
+    state.aiPlan = null;
+    saveSession();
+    toast('Partita contro IA');
+    syncPoll();
+  } catch (e) {
+    state.error = String(e.message || e);
+  } finally {
+    state.loading = false;
+    render();
+  }
 }
 
 function myMonsters(game = state.game) {
   return (game?.monsters || []).filter((m) => m.alive && m.controllerId === state.playerId);
 }
 
+function oppId() {
+  return state.playerId === 'a' ? 'b' : 'a';
+}
+
+function playerName(id, game = state.game) {
+  const p = game?.players?.[id];
+  if (p?.name) return p.name;
+  return id === 'a' ? 'Giocatore A' : 'Giocatore B';
+}
+
+/** Nome corto per colonne strette (storico). */
+function shortName(id, game = state.game) {
+  const n = playerName(id, game).trim();
+  if (n.length <= 8) return n;
+  return `${n.slice(0, 7)}…`;
+}
+
 function targetOptions() {
   const g = state.game;
   if (!g) return [];
-  const oppId = state.playerId === 'a' ? 'b' : 'a';
+  const other = oppId();
   const opts = [
-    { id: oppId, label: `Avversario (${g.players[oppId].name})` },
-    { id: state.playerId, label: `Tu (${g.players[state.playerId].name})` },
+    { id: other, label: playerName(other, g) },
+    { id: state.playerId, label: playerName(state.playerId, g) },
   ];
   for (const m of g.monsters || []) {
     if (!m.alive) continue;
     opts.push({
       id: m.id,
-      label: `${m.label} [${m.controllerId === state.playerId ? 'tuo' : 'avv'}] ${m.hp}/${m.maxHp}`,
+      label: `${m.label} (${playerName(m.controllerId, g)}) ${m.hp}/${m.maxHp}`,
     });
   }
   return opts;
 }
 
 function ensureDefaultTargets() {
-  const oppId = state.playerId === 'a' ? 'b' : 'a';
-  if (!state.stabTarget) state.stabTarget = oppId;
-  if (!state.spellTargetLeft) state.spellTargetLeft = oppId;
-  if (!state.spellTargetRight) state.spellTargetRight = oppId;
+  const other = oppId();
+  if (!state.stabTarget) state.stabTarget = other;
+  if (!state.spellTargetLeft) state.spellTargetLeft = other;
+  if (!state.spellTargetRight) state.spellTargetRight = other;
   for (const m of myMonsters()) {
-    if (!state.monsterTargets[m.id]) state.monsterTargets[m.id] = oppId;
+    if (!state.monsterTargets[m.id]) state.monsterTargets[m.id] = other;
   }
+  // Amnesia: show forced gestures from last turn
+  const st = myStatus();
+  if (st.amnesia && st.lastAction) {
+    const map = { '—': ' ', '†': 'stab', C: 'C' };
+    const toCode = (lab) => map[lab] || lab;
+    if (state.left == null) state.left = toCode(st.lastAction.left);
+    if (state.right == null) state.right = toCode(st.lastAction.right);
+  }
+}
+
+function myStatus() {
+  return state.game?.players?.[state.playerId]?.status || {};
+}
+
+function oppStatus() {
+  return state.game?.players?.[oppId()]?.status || {};
+}
+
+function statusBadges(st, { mine = false } = {}) {
+  if (!st) return '';
+  const badges = [];
+  if (st.resistHeat) badges.push(['Resist heat', 'ok']);
+  if (st.resistCold) badges.push(['Resist cold', 'ok']);
+  if (st.protectionFromEvilTurns > 0) badges.push([`Prot. evil ${st.protectionFromEvilTurns}`, 'ok']);
+  if (st.amnesia) badges.push(['Amnesia', 'warn']);
+  if (st.confusion) badges.push(['Confusion', 'warn']);
+  if (st.fear) badges.push(['Fear', 'warn']);
+  if (st.charmPerson) badges.push([mine ? 'Charmed' : 'Charm attivo', 'warn']);
+  if (st.paralysis) badges.push([`Paralisi ${st.paralysis.hand === 'right' ? 'DX' : 'SX'}`, 'warn']);
+  if (st.diseaseTurns > 0) badges.push([`Disease ${st.diseaseTurns}`, 'bad']);
+  if (st.poisonTurns > 0) badges.push([`Poison ${st.poisonTurns}`, 'bad']);
+  if (st.blindnessTurns > 0) badges.push([`Blind ${st.blindnessTurns}`, 'warn']);
+  if (st.invisibilityTurns > 0) badges.push([`Invis ${st.invisibilityTurns}`, 'ok']);
+  if (st.hasteTurns > 0) badges.push([`Haste ${st.hasteTurns}`, 'ok']);
+  if (st.delayedArmed > 0) badges.push([`Delayed ${st.delayedArmed}`, 'ok']);
+  if (st.delayedBank) badges.push([`Banca: ${st.delayedBank.spell}`, 'ok']);
+  if (st.permanencyArmed > 0) badges.push([`Permanency ${st.permanencyArmed}`, 'ok']);
+  if (st.antiSpellNextTurn) badges.push(['Anti-spell', 'warn']);
+  if (!badges.length) return '';
+  return `<div class="status-badges">${badges.map(([t, k]) => `<span class="sbadge ${k}">${escapeHtml(t)}</span>`).join('')}</div>`;
+}
+
+function fearBlocks(code) {
+  return ['C', 'D', 'F', 'S'].includes(code);
+}
+
+function controllingCharm() {
+  const opp = oppStatus();
+  return !!(opp.charmPerson && opp.charmPerson.controllerId === state.playerId);
+}
+
+function iAmCharmed() {
+  const me = myStatus();
+  return !!(me.charmPerson && me.charmPerson.controllerId !== state.playerId);
 }
 
 function buildTurnPayload() {
@@ -382,7 +593,7 @@ function buildTurnPayload() {
     monsterId: m.id,
     targetId: state.monsterTargets[m.id] || (state.playerId === 'a' ? 'b' : 'a'),
   }));
-  return {
+  const payload = {
     playerId: state.playerId,
     left: state.left,
     right: state.right,
@@ -393,11 +604,29 @@ function buildTurnPayload() {
     monsterOrders,
     stabTarget: state.stabTarget,
     elementalType: state.elementalType,
+    charmHand: state.charmHand,
+    paralysisHand: state.paralysisHand,
+    releaseDelayed: !!state.releaseDelayed,
   };
+  if (myStatus().hasteTurns > 0 && state.left2 != null && state.right2 != null) {
+    payload.left2 = state.left2;
+    payload.right2 = state.right2;
+  }
+  if (controllingCharm()) {
+    payload.charmForced = state.charmForced;
+  }
+  return payload;
 }
 
 async function endTurn() {
   if (!state.game || state.left == null || state.right == null) return;
+
+  const prompts = collectTurnPrompts();
+  if (prompts.length) {
+    const ok = await showOrdersModal(prompts);
+    if (!ok) return;
+  }
+
   state.loading = true;
   state.error = null;
   render();
@@ -406,7 +635,7 @@ async function endTurn() {
       method: 'POST',
       body: JSON.stringify(buildTurnPayload()),
     });
-    if (state.solo) game = await autoPassOpponent(game);
+    if (state.solo) game = await autoPlayAi(game);
     state.game = game;
     if (game.pendingTurn) {
       state.waitingSubmit = true;
@@ -414,6 +643,9 @@ async function endTurn() {
       state.waitingSubmit = false;
       state.left = null;
       state.right = null;
+      state.left2 = null;
+      state.right2 = null;
+      state.releaseDelayed = false;
       state.monsterTargets = {};
       ensureDefaultTargets();
       if (game.lastTurnCasts?.length) {
@@ -473,6 +705,8 @@ function leaveToHome() {
   state.right = null;
   state.waitingSubmit = false;
   state.error = null;
+  state.aiPlan = null;
+  state.solo = false;
   sessionStorage.removeItem(SESSION_KEY);
   clearJoinFromUrl();
   render();
@@ -496,6 +730,16 @@ function renderAppBar() {
       }
     };
     leftBar.appendChild(back);
+
+    if (state.view === 'duel') {
+      const neu = document.createElement('button');
+      neu.className = 'btn btn-ghost';
+      neu.id = 'btn-restart';
+      neu.textContent = state.loading ? '…' : 'Nuova partita';
+      neu.disabled = !!state.loading;
+      neu.onclick = () => restartNewGame();
+      leftBar.appendChild(neu);
+    }
   }
 
   if (state.view === 'duel') {
@@ -517,16 +761,16 @@ function renderWelcome() {
   app.innerHTML = `
     <section class="hero">
       <h1>Spellcaster</h1>
-      <p>Crea una partita e passa il link all’avversario. Oppure gioca da solo contro un bot che passa.</p>
+      <p>Sfida un amico con un link, oppure gioca contro un’IA (non troppo forte).</p>
       <label class="nick-field">
         <span>Il tuo nickname</span>
         <input id="nick-input" type="text" maxlength="24" placeholder="es. Merlin" value="${escapeHtml(nick)}" autocomplete="nickname" />
       </label>
       <button class="btn btn-primary" id="btn-new" ${state.loading ? 'disabled' : ''}>
-        ${state.loading ? 'Creazione…' : 'Nuova partita (2 giocatori)'}
+        ${state.loading ? 'Creazione…' : 'Sfida un amico'}
       </button>
       <button class="btn btn-ghost btn-block" id="btn-solo" ${state.loading ? 'disabled' : ''}>
-        Gioca da solo
+        Gioca contro IA
       </button>
       ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
     </section>
@@ -575,13 +819,39 @@ function renderNickGate() {
 
 function gestureButtons(handKey) {
   const selected = state[handKey];
-  const disabled = state.waitingSubmit || state.loading || state.game?.finished;
+  const disabledBase = state.waitingSubmit || state.loading || state.game?.finished;
+  const st = myStatus();
+  const fear = !!st.fear;
+  const amnesia = !!st.amnesia;
+  const charmHand = iAmCharmed() ? (st.charmPerson?.hand || 'left') : null;
+  const paraHand = st.paralysis?.hand || null;
+
   return HAND_OPTIONS.map((o) => {
     const sel = selected === o.code ? 'selected' : '';
+    let disabled = disabledBase;
+    let reason = '';
+    if (amnesia) {
+      disabled = true;
+      reason = 'Amnesia: gesti forzati';
+    }
+    if (fear && fearBlocks(o.code)) {
+      disabled = true;
+      reason = 'Fear: gesto vietato';
+    }
+    const isLeft = handKey === 'left' || handKey === 'left2';
+    const handSide = isLeft ? 'left' : 'right';
+    if (charmHand === handSide) {
+      disabled = true;
+      reason = 'Charm: mano controllata';
+    }
+    if (paraHand === handSide && (handKey === 'left' || handKey === 'right')) {
+      // still selectable but server remaps — hint via title
+      reason = reason || 'Paralisi: gesto modificato';
+    }
     const thumb = o.img
       ? `<img src="${o.img}" alt="${escapeHtml(o.title)}" /><span class="gesture-letter">${escapeHtml(o.label)}</span>`
       : `<span class="gesture-letter">${escapeHtml(o.label)}</span>`;
-    return `<button type="button" class="gesture ${sel}${o.img ? '' : ' empty'}" title="${escapeHtml(o.title)}" data-hand="${handKey}" data-code="${encodeURIComponent(o.code)}" ${disabled ? 'disabled' : ''}>${thumb}</button>`;
+    return `<button type="button" class="gesture ${sel}${o.img ? '' : ' empty'}${disabled && !disabledBase ? ' locked' : ''}" title="${escapeHtml(reason || o.title)}" data-hand="${handKey}" data-code="${encodeURIComponent(o.code)}" ${disabled ? 'disabled' : ''}>${thumb}</button>`;
   }).join('');
 }
 
@@ -616,11 +886,14 @@ function renderInviteBox() {
   return `
     <section class="invite">
       <div class="invite-title">Invita l’avversario</div>
-      <p class="invite-hint">Copia il link e passalo al secondo giocatore.</p>
+      <p class="invite-hint">Copia il link, oppure gioca subito contro l’IA.</p>
       <div class="invite-row">
         <input class="invite-input" id="invite-url" readonly value="${escapeHtml(url)}" />
         <button type="button" class="btn btn-ghost" id="btn-copy">Copia</button>
       </div>
+      <button type="button" class="btn btn-primary btn-block" id="btn-vs-ai" ${state.loading ? 'disabled' : ''} style="margin-top:12px">
+        Gioca contro IA
+      </button>
     </section>
   `;
 }
@@ -629,8 +902,11 @@ function renderHistory() {
   const g = state.game;
   const history = g.history || [];
   const me = state.playerId;
-  const opp = me === 'a' ? 'b' : 'a';
+  const other = oppId();
   const cols = g.monsterColumns || [];
+  const blind = (myStatus().blindnessTurns || 0) > 0;
+  const meShort = shortName(me, g);
+  const oppShort = shortName(other, g);
 
   if (!history.length) {
     return `
@@ -645,12 +921,14 @@ function renderHistory() {
 
   const headMonsters = cols.map((c) => {
     const mine = c.controllerId === me;
-    return `<div class="history-cell ${mine ? 'me' : ''}" title="${escapeHtml(c.label)}">${escapeHtml(c.label)}</div>`;
+    return `<div class="history-cell ${mine ? 'me' : ''}" title="${escapeHtml(c.label)} · ${escapeHtml(playerName(c.controllerId, g))}">${escapeHtml(c.label)}</div>`;
   }).join('');
+
+  const fog = `<span class="gesture-thumb compact empty" title="Blindness"><span class="gesture-letter">?</span></span>`;
 
   const rows = history.map((h) => {
     const mine = h[me];
-    const theirs = h[opp];
+    const theirs = h[other];
     const castNote = (h.casts || []).length
       ? `<span class="history-casts">${h.casts.map((c) => c.spell).join(', ')}</span>`
       : '';
@@ -663,8 +941,8 @@ function renderHistory() {
         <div class="history-turn">T${h.turn}</div>
         <div class="history-cell me">${gestureThumb(mine.left, { compact: true })}</div>
         <div class="history-cell me">${gestureThumb(mine.right, { compact: true })}</div>
-        <div class="history-cell">${gestureThumb(theirs.left, { compact: true })}</div>
-        <div class="history-cell">${gestureThumb(theirs.right, { compact: true })}</div>
+        <div class="history-cell">${blind ? fog : gestureThumb(theirs.left, { compact: true })}</div>
+        <div class="history-cell">${blind ? fog : gestureThumb(theirs.right, { compact: true })}</div>
         ${monsterCells}
         ${castNote ? `<div class="history-cast-cell">${castNote}</div>` : '<div class="history-cast-cell"></div>'}
       </div>
@@ -673,13 +951,13 @@ function renderHistory() {
 
   return `
     <section class="history">
-      <div class="history-title">Storico turni</div>
+      <div class="history-title">Storico turni${blind ? ' · cecità' : ''}</div>
       <div class="history-head" style="grid-template-columns:${colTemplate}">
         <div class="history-turn">#</div>
-        <div class="history-cell me">Tu SX</div>
-        <div class="history-cell me">Tu DX</div>
-        <div class="history-cell">Avv SX</div>
-        <div class="history-cell">Avv DX</div>
+        <div class="history-cell me" title="${escapeHtml(playerName(me, g))} sinistra">${escapeHtml(meShort)} SX</div>
+        <div class="history-cell me" title="${escapeHtml(playerName(me, g))} destra">${escapeHtml(meShort)} DX</div>
+        <div class="history-cell" title="${escapeHtml(playerName(other, g))} sinistra">${escapeHtml(oppShort)} SX</div>
+        <div class="history-cell" title="${escapeHtml(playerName(other, g))} destra">${escapeHtml(oppShort)} DX</div>
         ${headMonsters}
         <div class="history-cast-cell">Incantesimi</div>
       </div>
@@ -698,47 +976,157 @@ function renderTargetSelect(id, value, opts) {
   `;
 }
 
-function renderOrdersPanel() {
+/** Domande da fare prima di inviare il turno (solo se servono). */
+function collectTurnPrompts() {
   ensureDefaultTargets();
+  const prompts = [];
   const opts = targetOptions();
   const monsters = myMonsters();
-  const hasStab = state.left === 'stab' || state.right === 'stab';
+  const hasStab = state.left === 'stab' || state.right === 'stab'
+    || state.left2 === 'stab' || state.right2 === 'stab';
+  const st = myStatus();
 
-  const monsterRows = monsters.map((m) => `
-    <div class="order-row">
-      <span class="order-label">${escapeHtml(m.label)} (${m.hp}/${m.maxHp}) attacca</span>
-      ${renderTargetSelect(`mt-${m.id}`, state.monsterTargets[m.id], opts)}
-    </div>
-  `).join('');
+  for (const m of monsters) {
+    prompts.push({
+      kind: 'monster',
+      id: `mt-${m.id}`,
+      monsterId: m.id,
+      label: `Dove attacca ${m.label}?`,
+      type: 'target',
+      value: state.monsterTargets[m.id],
+      opts,
+    });
+  }
 
-  return `
-    <section class="orders">
-      <div class="orders-title">Bersagli</div>
-      <p class="orders-hint">Per regolamento dichiari chi colpiscono mostri e attacchi. Default: avversario.</p>
-      ${monsterRows || '<p class="meta">Nessuna creatura sotto il tuo controllo.</p>'}
-      <div class="order-row">
-        <span class="order-label">Bersaglio gesti SX (se offensivo)</span>
-        ${renderTargetSelect('spell-left', state.spellTargetLeft, opts)}
-      </div>
-      <div class="order-row">
-        <span class="order-label">Bersaglio gesti DX (se offensivo)</span>
-        ${renderTargetSelect('spell-right', state.spellTargetRight, opts)}
-      </div>
-      ${hasStab ? `
-        <div class="order-row">
-          <span class="order-label">Stab verso</span>
-          ${renderTargetSelect('stab-target', state.stabTarget, opts)}
+  if (hasStab) {
+    prompts.push({
+      kind: 'stab',
+      id: 'stab-target',
+      label: 'Stab verso chi?',
+      type: 'target',
+      value: state.stabTarget,
+      opts,
+    });
+  }
+
+  if (controllingCharm()) {
+    const forcedOpts = HAND_OPTIONS.filter((o) => {
+      if (o.code === ' ') return !!state.game?.rules?.allowCharmNothing;
+      return true;
+    }).map((o) => ({ id: o.code, label: o.title }));
+    prompts.push({
+      kind: 'charmForced',
+      id: 'charm-forced',
+      label: `Che gesto imponi a ${playerName(oppId())}?`,
+      type: 'select',
+      value: state.charmForced,
+      opts: forcedOpts,
+    });
+  }
+
+  if (st.delayedBank) {
+    prompts.push({
+      kind: 'releaseDelayed',
+      id: 'release-delayed',
+      label: `Rilasci «${st.delayedBank.spell}» dalla banca?`,
+      type: 'yesno',
+      value: !!state.releaseDelayed,
+    });
+  }
+
+  // Clap su entrambe → possibile elemental: chiedi tipo
+  if (state.left === 'C' && state.right === 'C') {
+    prompts.push({
+      kind: 'elemental',
+      id: 'elem-type',
+      label: 'Tipo elementale (se evochi)',
+      type: 'select',
+      value: state.elementalType,
+      opts: [
+        { id: 'fire', label: 'Fuoco' },
+        { id: 'ice', label: 'Ghiaccio' },
+      ],
+    });
+  }
+
+  return prompts;
+}
+
+function applyPromptValues(root) {
+  for (const el of root.querySelectorAll('[data-prompt]')) {
+    const kind = el.getAttribute('data-prompt');
+    const val = el.type === 'checkbox' ? el.checked : el.value;
+    if (kind === 'monster') {
+      state.monsterTargets[el.getAttribute('data-monster')] = val;
+    } else if (kind === 'stab') state.stabTarget = val;
+    else if (kind === 'charmForced') state.charmForced = val;
+    else if (kind === 'releaseDelayed') state.releaseDelayed = !!val;
+    else if (kind === 'spellLeft') state.spellTargetLeft = val;
+    else if (kind === 'spellRight') state.spellTargetRight = val;
+    else if (kind === 'elemental') state.elementalType = val;
+    else if (kind === 'charmHand') state.charmHand = val;
+    else if (kind === 'paralysisHand') state.paralysisHand = val;
+  }
+}
+
+/**
+ * Mostra popup con le sole domande necessarie.
+ * @returns {Promise<boolean>} true se conferma, false se annulla
+ */
+function showOrdersModal(prompts) {
+  return new Promise((resolve) => {
+    const existing = document.getElementById('orders-modal');
+    if (existing) existing.remove();
+
+    const fields = prompts.map((p) => {
+      if (p.type === 'yesno') {
+        return `
+          <label class="order-check modal-field">
+            <input type="checkbox" data-prompt="${p.kind}" id="${p.id}" ${p.value ? 'checked' : ''} />
+            ${escapeHtml(p.label)}
+          </label>
+        `;
+      }
+      const opts = p.opts || [];
+      return `
+        <div class="order-row modal-field">
+          <span class="order-label">${escapeHtml(p.label)}</span>
+          <select class="target-select" data-prompt="${p.kind}" ${p.kind === 'monster' ? `data-monster="${escapeHtml(p.monsterId)}"` : ''} id="${p.id}">
+            ${opts.map((o) => `
+              <option value="${escapeHtml(o.id)}" ${o.id === p.value ? 'selected' : ''}>${escapeHtml(o.label)}</option>
+            `).join('')}
+          </select>
         </div>
-      ` : ''}
-      <div class="order-row">
-        <span class="order-label">Elementale (se evochi)</span>
-        <select class="target-select" id="elem-type">
-          <option value="fire" ${state.elementalType === 'fire' ? 'selected' : ''}>Fuoco</option>
-          <option value="ice" ${state.elementalType === 'ice' ? 'selected' : ''}>Ghiaccio</option>
-        </select>
+      `;
+    }).join('');
+
+    const wrap = document.createElement('div');
+    wrap.id = 'orders-modal';
+    wrap.className = 'modal-backdrop';
+    wrap.innerHTML = `
+      <div class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="orders-modal-title">
+        <div class="modal-title" id="orders-modal-title">Conferma scelte</div>
+        <div class="modal-body">${fields}</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="modal-cancel">Annulla</button>
+          <button type="button" class="btn btn-primary" id="modal-ok">Conferma</button>
+        </div>
       </div>
-    </section>
-  `;
+    `;
+    document.body.appendChild(wrap);
+
+    const close = (ok) => {
+      if (ok) applyPromptValues(wrap);
+      wrap.remove();
+      resolve(ok);
+    };
+
+    wrap.querySelector('#modal-cancel').onclick = () => close(false);
+    wrap.querySelector('#modal-ok').onclick = () => close(true);
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) close(false);
+    });
+  });
 }
 
 function renderMonstersScore() {
@@ -750,33 +1138,41 @@ function renderMonstersScore() {
         <div class="monster-chip ${m.controllerId === state.playerId ? 'mine' : ''}">
           <strong>${escapeHtml(m.label)}</strong>
           <span>${m.hp}/${m.maxHp} · ATK ${m.attack}</span>
-          <span class="muted">${m.controllerId === state.playerId ? 'tuo' : 'avv'}</span>
+          <span class="muted">${escapeHtml(playerName(m.controllerId))}${m.paralyzed ? ' · paralisi' : ''}${m.confused ? ' · confuso' : ''}</span>
         </div>
       `).join('')}
     </div>
   `;
 }
 
-function wireOrderSelects() {
-  document.querySelectorAll('select.target-select').forEach((el) => {
-    el.addEventListener('change', () => {
-      const id = el.id;
-      const val = el.value;
-      if (id === 'spell-left') state.spellTargetLeft = val;
-      else if (id === 'spell-right') state.spellTargetRight = val;
-      else if (id === 'stab-target') state.stabTarget = val;
-      else if (id === 'elem-type') state.elementalType = val;
-      else if (id.startsWith('mt-')) state.monsterTargets[id.slice(3)] = val;
-    });
-  });
+function renderEffectHints() {
+  const st = myStatus();
+  const hints = [];
+  if (st.amnesia) hints.push('Amnesia: ripeterai i gesti del turno scorso.');
+  if (st.fear) hints.push('Fear: non puoi usare C, D, F, S.');
+  if (st.confusion) hints.push('Confusion: un gesto sarà sostituito a caso.');
+  if (iAmCharmed()) hints.push(`Charm: la mano ${st.charmPerson?.hand === 'right' ? 'destra' : 'sinistra'} è controllata.`);
+  if (st.paralysis) hints.push(`Paralisi: la mano ${st.paralysis.hand === 'right' ? 'destra' : 'sinistra'} verrà rimappata.`);
+  if (st.hasteTurns > 0) hints.push('Haste: puoi fare una seconda coppia di gesti.');
+  if (state.game?.extraTurnFor === state.playerId) hints.push('Time stop: turno extra solo per te.');
+  if (!hints.length) return '';
+  return `<ul class="effect-hints">${hints.map((h) => `<li>${escapeHtml(h)}</li>`).join('')}</ul>`;
 }
 
 function renderDuel() {
   const g = state.game;
   const me = g.players[state.playerId];
-  const oppId = state.playerId === 'a' ? 'b' : 'a';
-  const opp = g.players[oppId];
-  const canSubmit = !state.loading && !state.waitingSubmit && state.left != null && state.right != null && !g.finished;
+  const otherId = oppId();
+  const opp = g.players[otherId];
+  const haste = (me.status?.hasteTurns || 0) > 0;
+  const hasteReady = !haste || (state.left2 != null && state.right2 != null);
+  const canSubmit =
+    !state.loading &&
+    !state.waitingSubmit &&
+    state.left != null &&
+    state.right != null &&
+    hasteReady &&
+    !g.finished;
   ensureDefaultTargets();
 
   let finished = '';
@@ -784,57 +1180,57 @@ function renderDuel() {
     const msg = g.isDraw
       ? 'Pareggio'
       : g.winnerId === state.playerId
-        ? 'Hai vinto'
-        : 'Hai perso';
-    finished = `<div class="finished-banner">${msg}</div>`;
+        ? `Vince ${me.name}`
+        : `Vince ${opp.name}`;
+    finished = `<div class="finished-banner">${escapeHtml(msg)}</div>`;
   }
 
   const status = state.waitingSubmit
-    ? `<p class="status wait">Turno inviato — in attesa dell’avversario…</p>`
+    ? `<p class="status wait">Turno inviato — in attesa di ${escapeHtml(playerName(otherId))}…</p>`
     : (!state.solo && state.playerId === 'a' && !opponentJoined()
-      ? `<p class="status">In attesa che l’avversario apra il link…</p>`
-      : '');
+      ? `<p class="status">In attesa che ${escapeHtml(playerName(otherId))} apra il link…</p>`
+      : g.extraTurnFor === state.playerId
+        ? `<p class="status wait">Time stop — turno extra di ${escapeHtml(me.name)}</p>`
+        : '');
 
   app.innerHTML = `
     ${finished}
     ${renderInviteBox()}
     <div class="score">
       <div class="score-card you">
-        <div class="label">Tu (${state.playerId === 'a' ? 'A' : 'B'})</div>
         <div class="name">${escapeHtml(me.name)}</div>
         <div class="hp">${me.damage} / 14</div>
+        ${statusBadges(me.status, { mine: true })}
       </div>
       <div class="score-card">
-        <div class="label">Avversario</div>
         <div class="name">${escapeHtml(opp.name)}</div>
         <div class="hp">${opp.damage} / 14</div>
+        ${statusBadges(opp.status)}
       </div>
     </div>
     ${renderMonstersScore()}
-    <p class="meta">Turno ${g.turn}</p>
+    <p class="meta">Turno ${g.turn}${g.extraTurnFor ? ' · time stop' : ''}</p>
     ${status}
-    ${g.finished ? `
-      <div class="actions">
-        <button class="btn btn-primary" id="btn-restart" ${state.loading ? 'disabled' : ''}>
-          ${state.loading ? 'Creazione…' : 'Nuova partita'}
-        </button>
-      </div>
-    ` : `
-      <p class="hint">1. Scegli i gesti · 2. Imposta i bersagli · 3. Fine turno</p>
+    ${renderEffectHints()}
+    ${g.finished ? '' : `
+      <p class="hint">Scegli i gesti, poi Fine turno</p>
       <div class="hands-row">
         ${renderHand('Mano sinistra', 'left')}
         ${renderHand('Mano destra', 'right')}
       </div>
-      ${renderOrdersPanel()}
+      ${haste ? `
+        <p class="hint haste-hint">Seconda coppia (Haste)</p>
+        <div class="hands-row haste-row">
+          ${renderHand('Haste SX', 'left2')}
+          ${renderHand('Haste DX', 'right2')}
+        </div>
+      ` : ''}
       <div class="actions">
         <button class="btn btn-primary" id="btn-end" ${canSubmit ? '' : 'disabled'}>
           ${state.loading ? 'Invio…' : state.waitingSubmit ? 'In attesa…' : 'Fine turno'}
         </button>
-        <button class="btn btn-ghost btn-block" id="btn-restart" ${state.loading ? 'disabled' : ''}>
-          Nuova partita
-        </button>
-        ${state.left == null || state.right == null
-          ? '<p class="meta">Seleziona entrambe le mani prima di inviare.</p>'
+        ${state.left == null || state.right == null || (haste && (state.left2 == null || state.right2 == null))
+          ? '<p class="meta">Seleziona tutte le mani richieste prima di inviare.</p>'
           : ''}
         ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
       </div>
@@ -852,30 +1248,47 @@ function renderDuel() {
     });
   });
 
-  wireOrderSelects();
-
   const endBtn = document.getElementById('btn-end');
   if (endBtn) endBtn.onclick = endTurn;
 
-  const restartBtn = document.getElementById('btn-restart');
-  if (restartBtn) restartBtn.onclick = restartNewGame;
-
   const copyBtn = document.getElementById('btn-copy');
   if (copyBtn) copyBtn.onclick = copyInvite;
+
+  const vsAiBtn = document.getElementById('btn-vs-ai');
+  if (vsAiBtn) vsAiBtn.onclick = switchToAiOpponent;
 }
 
 function renderSpells() {
   const list = state.spells || [];
+  const sections = {
+    protection: 'Protezione',
+    summons: 'Evocazioni',
+    damaging: 'Danno',
+    enchantment: 'Enchantments',
+  };
+  const bySection = {};
+  for (const s of list) {
+    const key = s.section || 'other';
+    if (!bySection[key]) bySection[key] = [];
+    bySection[key].push(s);
+  }
   app.innerHTML = `
     <div class="spell-ref">
       <h3>Incantesimi</h3>
       ${list.length === 0 ? '<p class="meta">Caricamento…</p>' : ''}
-      ${list.map((s) => `
-        <div class="spell-item">
-          <span>${escapeHtml(s.name)}</span>
-          <span class="g">${escapeHtml(s.gestures)}</span>
-        </div>
-      `).join('')}
+      ${Object.entries(sections).map(([key, title]) => {
+        const items = bySection[key] || [];
+        if (!items.length) return '';
+        return `
+          <h4 class="spell-section">${escapeHtml(title)}</h4>
+          ${items.map((s) => `
+            <div class="spell-item">
+              <span>${escapeHtml(s.name)}</span>
+              <span class="g">${escapeHtml(s.gestures)}</span>
+            </div>
+          `).join('')}
+        `;
+      }).join('')}
     </div>
   `;
 }
