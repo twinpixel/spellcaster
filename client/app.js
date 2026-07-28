@@ -35,6 +35,12 @@ const state = {
   solo: false,
   waitingSubmit: false,
   pendingJoinId: null,
+  /** @type {Record<string, string>} monsterId -> targetId */
+  monsterTargets: {},
+  stabTarget: null,
+  spellTargetLeft: null,
+  spellTargetRight: null,
+  elementalType: 'fire',
 };
 
 let pollTimer = null;
@@ -338,6 +344,58 @@ async function autoPassOpponent(game) {
   });
 }
 
+function myMonsters(game = state.game) {
+  return (game?.monsters || []).filter((m) => m.alive && m.controllerId === state.playerId);
+}
+
+function targetOptions() {
+  const g = state.game;
+  if (!g) return [];
+  const oppId = state.playerId === 'a' ? 'b' : 'a';
+  const opts = [
+    { id: oppId, label: `Avversario (${g.players[oppId].name})` },
+    { id: state.playerId, label: `Tu (${g.players[state.playerId].name})` },
+  ];
+  for (const m of g.monsters || []) {
+    if (!m.alive) continue;
+    opts.push({
+      id: m.id,
+      label: `${m.label} [${m.controllerId === state.playerId ? 'tuo' : 'avv'}] ${m.hp}/${m.maxHp}`,
+    });
+  }
+  return opts;
+}
+
+function ensureDefaultTargets() {
+  const oppId = state.playerId === 'a' ? 'b' : 'a';
+  if (!state.stabTarget) state.stabTarget = oppId;
+  if (!state.spellTargetLeft) state.spellTargetLeft = oppId;
+  if (!state.spellTargetRight) state.spellTargetRight = oppId;
+  for (const m of myMonsters()) {
+    if (!state.monsterTargets[m.id]) state.monsterTargets[m.id] = oppId;
+  }
+}
+
+function buildTurnPayload() {
+  ensureDefaultTargets();
+  const monsterOrders = myMonsters().map((m) => ({
+    monsterId: m.id,
+    targetId: state.monsterTargets[m.id] || (state.playerId === 'a' ? 'b' : 'a'),
+  }));
+  return {
+    playerId: state.playerId,
+    left: state.left,
+    right: state.right,
+    spellTargets: {
+      left: state.spellTargetLeft,
+      right: state.spellTargetRight,
+    },
+    monsterOrders,
+    stabTarget: state.stabTarget,
+    elementalType: state.elementalType,
+  };
+}
+
 async function endTurn() {
   if (!state.game || state.left == null || state.right == null) return;
   state.loading = true;
@@ -346,11 +404,7 @@ async function endTurn() {
   try {
     let game = await api(`/games/${encodeURIComponent(state.game.id)}/turn`, {
       method: 'POST',
-      body: JSON.stringify({
-        playerId: state.playerId,
-        left: state.left,
-        right: state.right,
-      }),
+      body: JSON.stringify(buildTurnPayload()),
     });
     if (state.solo) game = await autoPassOpponent(game);
     state.game = game;
@@ -360,9 +414,13 @@ async function endTurn() {
       state.waitingSubmit = false;
       state.left = null;
       state.right = null;
+      state.monsterTargets = {};
+      ensureDefaultTargets();
       if (game.lastTurnCasts?.length) {
         toast(`Incantesimi: ${game.lastTurnCasts.map((c) => c.spell).join(', ')}`);
       }
+      const myNew = (game.monsters || []).filter((m) => m.alive && m.controllerId === state.playerId);
+      if (myNew.length) toast(`Creature: ${myNew.map((m) => m.label).join(', ')}`);
     }
     saveSession();
     syncPoll();
@@ -572,6 +630,7 @@ function renderHistory() {
   const history = g.history || [];
   const me = state.playerId;
   const opp = me === 'a' ? 'b' : 'a';
+  const cols = g.monsterColumns || [];
 
   if (!history.length) {
     return `
@@ -582,19 +641,31 @@ function renderHistory() {
     `;
   }
 
+  const colTemplate = `2.2rem repeat(4, minmax(0, 1fr))${cols.map(() => ' minmax(3.2rem, 1fr)').join('')} minmax(0, 1.4fr)`;
+
+  const headMonsters = cols.map((c) => {
+    const mine = c.controllerId === me;
+    return `<div class="history-cell ${mine ? 'me' : ''}" title="${escapeHtml(c.label)}">${escapeHtml(c.label)}</div>`;
+  }).join('');
+
   const rows = history.map((h) => {
     const mine = h[me];
     const theirs = h[opp];
     const castNote = (h.casts || []).length
       ? `<span class="history-casts">${h.casts.map((c) => c.spell).join(', ')}</span>`
       : '';
+    const monsterCells = cols.map((c) => {
+      const entry = (h.monsters && h.monsters[c.id]) || { text: '—' };
+      return `<div class="history-cell monster-cell" title="${escapeHtml(entry.label || c.label)}">${escapeHtml(entry.text || '—')}</div>`;
+    }).join('');
     return `
-      <div class="history-row">
+      <div class="history-row" style="grid-template-columns:${colTemplate}">
         <div class="history-turn">T${h.turn}</div>
         <div class="history-cell me">${gestureThumb(mine.left, { compact: true })}</div>
         <div class="history-cell me">${gestureThumb(mine.right, { compact: true })}</div>
         <div class="history-cell">${gestureThumb(theirs.left, { compact: true })}</div>
         <div class="history-cell">${gestureThumb(theirs.right, { compact: true })}</div>
+        ${monsterCells}
         ${castNote ? `<div class="history-cast-cell">${castNote}</div>` : '<div class="history-cast-cell"></div>'}
       </div>
     `;
@@ -603,17 +674,101 @@ function renderHistory() {
   return `
     <section class="history">
       <div class="history-title">Storico turni</div>
-      <div class="history-head">
+      <div class="history-head" style="grid-template-columns:${colTemplate}">
         <div class="history-turn">#</div>
         <div class="history-cell me">Tu SX</div>
         <div class="history-cell me">Tu DX</div>
         <div class="history-cell">Avv SX</div>
         <div class="history-cell">Avv DX</div>
+        ${headMonsters}
         <div class="history-cast-cell">Incantesimi</div>
       </div>
       <div class="history-scroll">${rows}</div>
     </section>
   `;
+}
+
+function renderTargetSelect(id, value, opts) {
+  return `
+    <select class="target-select" id="${id}">
+      ${opts.map((o) => `
+        <option value="${escapeHtml(o.id)}" ${o.id === value ? 'selected' : ''}>${escapeHtml(o.label)}</option>
+      `).join('')}
+    </select>
+  `;
+}
+
+function renderOrdersPanel() {
+  ensureDefaultTargets();
+  const opts = targetOptions();
+  const monsters = myMonsters();
+  const hasStab = state.left === 'stab' || state.right === 'stab';
+
+  const monsterRows = monsters.map((m) => `
+    <div class="order-row">
+      <span class="order-label">${escapeHtml(m.label)} (${m.hp}/${m.maxHp}) attacca</span>
+      ${renderTargetSelect(`mt-${m.id}`, state.monsterTargets[m.id], opts)}
+    </div>
+  `).join('');
+
+  return `
+    <section class="orders">
+      <div class="orders-title">Bersagli</div>
+      <p class="orders-hint">Per regolamento dichiari chi colpiscono mostri e attacchi. Default: avversario.</p>
+      ${monsterRows || '<p class="meta">Nessuna creatura sotto il tuo controllo.</p>'}
+      <div class="order-row">
+        <span class="order-label">Bersaglio gesti SX (se offensivo)</span>
+        ${renderTargetSelect('spell-left', state.spellTargetLeft, opts)}
+      </div>
+      <div class="order-row">
+        <span class="order-label">Bersaglio gesti DX (se offensivo)</span>
+        ${renderTargetSelect('spell-right', state.spellTargetRight, opts)}
+      </div>
+      ${hasStab ? `
+        <div class="order-row">
+          <span class="order-label">Stab verso</span>
+          ${renderTargetSelect('stab-target', state.stabTarget, opts)}
+        </div>
+      ` : ''}
+      <div class="order-row">
+        <span class="order-label">Elementale (se evochi)</span>
+        <select class="target-select" id="elem-type">
+          <option value="fire" ${state.elementalType === 'fire' ? 'selected' : ''}>Fuoco</option>
+          <option value="ice" ${state.elementalType === 'ice' ? 'selected' : ''}>Ghiaccio</option>
+        </select>
+      </div>
+    </section>
+  `;
+}
+
+function renderMonstersScore() {
+  const list = (state.game.monsters || []).filter((m) => m.alive);
+  if (!list.length) return '';
+  return `
+    <div class="monsters-bar">
+      ${list.map((m) => `
+        <div class="monster-chip ${m.controllerId === state.playerId ? 'mine' : ''}">
+          <strong>${escapeHtml(m.label)}</strong>
+          <span>${m.hp}/${m.maxHp} · ATK ${m.attack}</span>
+          <span class="muted">${m.controllerId === state.playerId ? 'tuo' : 'avv'}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function wireOrderSelects() {
+  document.querySelectorAll('select.target-select').forEach((el) => {
+    el.addEventListener('change', () => {
+      const id = el.id;
+      const val = el.value;
+      if (id === 'spell-left') state.spellTargetLeft = val;
+      else if (id === 'spell-right') state.spellTargetRight = val;
+      else if (id === 'stab-target') state.stabTarget = val;
+      else if (id === 'elem-type') state.elementalType = val;
+      else if (id.startsWith('mt-')) state.monsterTargets[id.slice(3)] = val;
+    });
+  });
 }
 
 function renderDuel() {
@@ -622,6 +777,7 @@ function renderDuel() {
   const oppId = state.playerId === 'a' ? 'b' : 'a';
   const opp = g.players[oppId];
   const canSubmit = !state.loading && !state.waitingSubmit && state.left != null && state.right != null && !g.finished;
+  ensureDefaultTargets();
 
   let finished = '';
   if (g.finished) {
@@ -654,6 +810,7 @@ function renderDuel() {
         <div class="hp">${opp.damage} / 14</div>
       </div>
     </div>
+    ${renderMonstersScore()}
     <p class="meta">Turno ${g.turn}</p>
     ${status}
     ${g.finished ? `
@@ -663,11 +820,12 @@ function renderDuel() {
         </button>
       </div>
     ` : `
-      <p class="hint">1. Scegli il gesto di ogni mano<br>2. Premi «Fine turno»</p>
+      <p class="hint">1. Scegli i gesti · 2. Imposta i bersagli · 3. Fine turno</p>
       <div class="hands-row">
         ${renderHand('Mano sinistra', 'left')}
         ${renderHand('Mano destra', 'right')}
       </div>
+      ${renderOrdersPanel()}
       <div class="actions">
         <button class="btn btn-primary" id="btn-end" ${canSubmit ? '' : 'disabled'}>
           ${state.loading ? 'Invio…' : state.waitingSubmit ? 'In attesa…' : 'Fine turno'}
@@ -693,6 +851,8 @@ function renderDuel() {
       render();
     });
   });
+
+  wireOrderSelects();
 
   const endBtn = document.getElementById('btn-end');
   if (endBtn) endBtn.onclick = endTurn;

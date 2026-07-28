@@ -100,6 +100,10 @@ export class GameRoom {
           right: body.right ?? ' ',
           leftSpell: body.leftSpell,
           rightSpell: body.rightSpell,
+          spellTargets: body.spellTargets,
+          monsterOrders: body.monsterOrders,
+          stabTarget: body.stabTarget,
+          elementalType: body.elementalType,
         });
         await this.save();
         return jsonResponse(snap);

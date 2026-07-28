@@ -233,7 +233,7 @@ export function detectCasts(wizard, leftChoice, rightChoice) {
   return casts;
 }
 
-/** Spells that by default target the opponent. */
+/** Spells that by default target the opponent (wizard or ordered target). */
 const DAMAGING_SPELLS = new Set([
   'missile',
   'fingerOfDeath',
@@ -242,12 +242,19 @@ const DAMAGING_SPELLS = new Set([
   'causeLightWounds',
   'causeHeavyWounds',
   'fireball',
-  'fireStorm',
-  'iceStorm',
 ]);
 
-function defaultTarget(spell, casterId, opponentId) {
-  if (DAMAGING_SPELLS.has(spell)) return opponentId;
+const SUMMON_SPELLS = {
+  summonGoblin: { type: 'goblin', label: 'Goblin', attack: 1, hp: 1 },
+  summonOgre: { type: 'ogre', label: 'Ogre', attack: 2, hp: 2 },
+  summonTroll: { type: 'troll', label: 'Troll', attack: 3, hp: 3 },
+  summonGiant: { type: 'giant', label: 'Giant', attack: 4, hp: 4 },
+  summonElemental: { type: 'elemental', label: 'Elemental', attack: 3, hp: 3 },
+};
+
+function defaultTarget(spell, casterId, foeId) {
+  if (DAMAGING_SPELLS.has(spell) || spell === 'fireStorm' || spell === 'iceStorm') return foeId;
+  if (SUMMON_SPELLS[spell]) return casterId; // subject = controller
   return casterId;
 }
 
@@ -264,29 +271,107 @@ function applyCure(wizard, amount) {
 }
 
 function wizardById(state, id) {
-  return id === state.wizardA.id ? state.wizardA : state.wizardB;
+  if (id === state.wizardA.id) return state.wizardA;
+  if (id === state.wizardB.id) return state.wizardB;
+  return null;
 }
 
 function opponentId(state, id) {
   return id === state.wizardA.id ? state.wizardB.id : state.wizardA.id;
 }
 
-/**
- * Resolve casts + stabs for the turn. Mutates wizards' damage/status.
- * Simplified simultaneous resolution covering damage, cures, shield, stab.
- */
-export function resolveEffects(state, castsA, castsB, actionA, actionB) {
-  const all = [
-    ...castsA.map((c) => ({
-      ...c,
-      targetId: c.targetId || defaultTarget(c.spell, c.casterId, opponentId(state, c.casterId)),
-    })),
-    ...castsB.map((c) => ({
-      ...c,
-      targetId: c.targetId || defaultTarget(c.spell, c.casterId, opponentId(state, c.casterId)),
-    })),
-  ];
+function monsterById(state, id) {
+  return (state.monsters || []).find((m) => m.id === id) || null;
+}
 
+function livingMonsters(state) {
+  return (state.monsters || []).filter((m) => m.alive);
+}
+
+function nextMonsterId(state) {
+  state.monsterSeq = (state.monsterSeq || 0) + 1;
+  return `m${state.monsterSeq}`;
+}
+
+function createMonster(state, spell, controllerId, elementalType) {
+  const def = SUMMON_SPELLS[spell];
+  if (!def) return null;
+  const isElem = spell === 'summonElemental';
+  const type = isElem ? (elementalType === 'ice' ? 'ice' : 'fire') : def.type;
+  const label = isElem
+    ? (type === 'ice' ? 'Ice Elem' : 'Fire Elem')
+    : def.label;
+  const monster = {
+    id: nextMonsterId(state),
+    type,
+    label,
+    controllerId,
+    attack: def.attack,
+    hp: def.hp,
+    maxHp: def.hp,
+    alive: true,
+    elementalType: isElem ? type : null,
+  };
+  state.monsters = state.monsters || [];
+  state.monsters.push(monster);
+  state.monsterColumns = state.monsterColumns || [];
+  state.monsterColumns.push({ id: monster.id, label: monster.label, controllerId });
+  return monster;
+}
+
+function hurtMonster(monster, amount) {
+  if (!monster || !monster.alive) return;
+  monster.hp -= amount;
+  if (monster.hp <= 0) {
+    monster.hp = 0;
+    monster.alive = false;
+  }
+}
+
+function isWizardId(id) {
+  return id === 'a' || id === 'b';
+}
+
+function resolveTargetHit(state, targetId, amount, shielded, opts = {}) {
+  if (!targetId) return;
+  if (isWizardId(targetId)) {
+    if (!opts.ignoreShield && shielded.has(targetId)) return;
+    const w = wizardById(state, targetId);
+    if (w) applyDamage(w, amount);
+    return;
+  }
+  const m = monsterById(state, targetId);
+  if (m && m.alive) hurtMonster(m, amount);
+}
+
+/**
+ * Resolve casts, summons, monster attacks, stabs.
+ * choices: {
+ *   leftChoiceA/B, rightChoiceA/B,
+ *   spellTargetA/B: { left?, right? },
+ *   monsterOrdersA/B: [{ monsterId, targetId }],
+ *   stabTargetA/B,
+ *   elementalTypeA/B: 'fire'|'ice',
+ * }
+ */
+export function resolveEffects(state, castsA, castsB, actionA, actionB, choices = {}) {
+  const foe = (id) => opponentId(state, id);
+
+  function withTargets(casts, spellTargets, casterId) {
+    return casts.map((c) => {
+      const handKey = c.handIndex === 0 ? 'left' : 'right';
+      const ordered = spellTargets?.[handKey];
+      return {
+        ...c,
+        targetId: ordered || defaultTarget(c.spell, casterId, foe(casterId)),
+      };
+    });
+  }
+
+  const all = [
+    ...withTargets(castsA, choices.spellTargetA, state.wizardA.id),
+    ...withTargets(castsB, choices.spellTargetB, state.wizardB.id),
+  ];
   const active = all.map((c) => ({ ...c, cancelled: false }));
 
   const hasDispel = active.some((c) => c.spell === 'dispelMagic' && !c.cancelled);
@@ -296,135 +381,282 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB) {
     }
   }
 
-  // Counter-spell on a subject cancels other spells targeting them (not dispel / fingerOfDeath).
   const countered = new Set(
     active.filter((c) => c.spell === 'counterSpell' && !c.cancelled).map((c) => c.targetId),
   );
   for (const c of active) {
     if (c.cancelled) continue;
     if (c.spell === 'counterSpell' || c.spell === 'dispelMagic' || c.spell === 'fingerOfDeath') continue;
-    if (countered.has(c.targetId)) c.cancelled = true;
+    if (isWizardId(c.targetId) && countered.has(c.targetId)) c.cancelled = true;
   }
 
-  // Mirror: reflect damaging single-target spells (missile / lightning) back to caster.
   const mirrored = new Set(
     active.filter((c) => c.spell === 'magicMirror' && !c.cancelled).map((c) => c.targetId),
   );
   for (const c of active) {
     if (c.cancelled) continue;
     if (!['missile', 'lightningBoltLong', 'lightningBoltShort'].includes(c.spell)) continue;
-    if (mirrored.has(c.targetId) && !countered.has(c.targetId)) {
+    if (isWizardId(c.targetId) && mirrored.has(c.targetId) && !countered.has(c.targetId)) {
       c.targetId = c.casterId;
     }
   }
 
-  // Shield / counter / protection this turn (also counter final gesture = shield).
   const shielded = new Set();
   for (const c of active) {
     if (c.cancelled) continue;
-    if (c.spell === 'shield' || c.spell === 'counterSpell' || c.spell === 'dispelMagic' || c.spell === 'protectionFromEvil') {
-      shielded.add(c.targetId);
+    if (
+      c.spell === 'shield' ||
+      c.spell === 'counterSpell' ||
+      c.spell === 'dispelMagic' ||
+      c.spell === 'protectionFromEvil'
+    ) {
+      if (isWizardId(c.targetId)) shielded.add(c.targetId);
     }
   }
   for (const w of [state.wizardA, state.wizardB]) {
     if (w.status.protectionFromEvilTurns > 0) shielded.add(w.id);
   }
 
-  // Apply remaining spell effects.
+  const monsterLog = {}; // id -> { label, text }
+  for (const m of state.monsters || []) {
+    monsterLog[m.id] = { label: m.label, text: m.alive ? '—' : '☠' };
+  }
+
+  const pendingSummons = [];
+  let destroyAllMonstersAfterAttack = hasDispel;
+
   for (const c of active) {
     if (c.cancelled) continue;
-    const target = wizardById(state, c.targetId);
     const caster = wizardById(state, c.casterId);
+    const targetWizard = isWizardId(c.targetId) ? wizardById(state, c.targetId) : null;
 
     switch (c.spell) {
       case 'missile':
-        if (!shielded.has(target.id)) applyDamage(target, 1);
+        resolveTargetHit(state, c.targetId, 1, shielded);
         break;
       case 'fingerOfDeath':
-        applyDamage(target, 999);
+        if (isWizardId(c.targetId)) applyDamage(targetWizard, 999);
+        else hurtMonster(monsterById(state, c.targetId), 999);
         break;
       case 'lightningBoltLong':
-        applyDamage(target, 5);
+        resolveTargetHit(state, c.targetId, 5, shielded, { ignoreShield: true });
         break;
       case 'lightningBoltShort':
-        if (!caster.usedShortLightning) {
+        if (caster && !caster.usedShortLightning) {
           caster.usedShortLightning = true;
-          applyDamage(target, 5);
+          resolveTargetHit(state, c.targetId, 5, shielded, { ignoreShield: true });
         }
         break;
       case 'causeLightWounds':
-        applyDamage(target, 2);
+        resolveTargetHit(state, c.targetId, 2, shielded, { ignoreShield: true });
         break;
       case 'causeHeavyWounds':
-        applyDamage(target, 3);
+        resolveTargetHit(state, c.targetId, 3, shielded, { ignoreShield: true });
         break;
       case 'fireball':
-        if (!target.status.resistHeat) applyDamage(target, 5);
+        if (isWizardId(c.targetId)) {
+          if (targetWizard && !targetWizard.status.resistHeat) applyDamage(targetWizard, 5);
+        } else {
+          const m = monsterById(state, c.targetId);
+          if (m?.alive) {
+            if (m.elementalType === 'ice') hurtMonster(m, 999);
+            else hurtMonster(m, 5);
+          }
+        }
         break;
       case 'fireStorm':
         for (const w of [state.wizardA, state.wizardB]) {
           if (!w.status.resistHeat) applyDamage(w, 5);
+        }
+        for (const m of livingMonsters(state)) {
+          if (m.elementalType === 'ice') hurtMonster(m, 999);
+          else if (m.elementalType !== 'fire') hurtMonster(m, 5);
         }
         break;
       case 'iceStorm':
         for (const w of [state.wizardA, state.wizardB]) {
           if (!w.status.resistCold) applyDamage(w, 5);
         }
+        for (const m of livingMonsters(state)) {
+          if (m.elementalType === 'fire') hurtMonster(m, 999);
+          else if (m.elementalType !== 'ice') hurtMonster(m, 5);
+        }
         break;
       case 'cureLightWounds':
-        applyCure(target, 1);
+        if (targetWizard) applyCure(targetWizard, 1);
         break;
       case 'cureHeavyWounds':
-        applyCure(target, 2);
+        if (targetWizard) applyCure(targetWizard, 2);
         break;
       case 'raiseDead':
-        if (target.damage > WIZARD_MAX_DAMAGE) {
-          target.damage = 0;
-        } else {
-          applyCure(target, 5);
+        if (targetWizard) {
+          if (targetWizard.damage > WIZARD_MAX_DAMAGE) targetWizard.damage = 0;
+          else applyCure(targetWizard, 5);
         }
         break;
       case 'resistHeat':
-        target.status.resistHeat = true;
+        if (targetWizard) targetWizard.status.resistHeat = true;
+        for (const m of livingMonsters(state)) {
+          if (m.elementalType === 'fire' && m.controllerId !== c.casterId) {
+            // resist heat on caster destroys opposing fire elemental if targeted? rules: on fire elemental destroys it when cast on it
+          }
+        }
+        if (!isWizardId(c.targetId)) {
+          const m = monsterById(state, c.targetId);
+          if (m?.elementalType === 'fire') hurtMonster(m, 999);
+        }
         break;
       case 'resistCold':
-        target.status.resistCold = true;
+        if (targetWizard) targetWizard.status.resistCold = true;
+        if (!isWizardId(c.targetId)) {
+          const m = monsterById(state, c.targetId);
+          if (m?.elementalType === 'ice') hurtMonster(m, 999);
+        }
         break;
       case 'protectionFromEvil':
-        target.status.protectionFromEvilTurns = 4;
-        shielded.add(target.id);
+        if (targetWizard) {
+          targetWizard.status.protectionFromEvilTurns = 4;
+          shielded.add(targetWizard.id);
+        }
         break;
       case 'antiSpell':
-        target.status.antiSpellNextTurn = true;
+        if (targetWizard) targetWizard.status.antiSpellNextTurn = true;
+        break;
+      case 'removeEnchantment':
+        if (!isWizardId(c.targetId)) {
+          const m = monsterById(state, c.targetId);
+          if (m?.alive) {
+            // still attacks this turn
+            m._dieAfterAttack = true;
+          }
+        }
+        break;
+      case 'summonGoblin':
+      case 'summonOgre':
+      case 'summonTroll':
+      case 'summonGiant':
+      case 'summonElemental':
+        pendingSummons.push(c);
+        break;
+      case 'dispelMagic':
+        destroyAllMonstersAfterAttack = true;
         break;
       default:
         break;
     }
   }
 
-  // Stab: 1 damage, blocked by shield-equivalent; one dagger per wizard.
-  function resolveStab(action, attackerId) {
-    if (action.left.kind !== 'stab' && action.right.kind !== 'stab') return;
-    const victimId = opponentId(state, attackerId);
-    if (shielded.has(victimId)) return;
-    applyDamage(wizardById(state, victimId), 1);
-  }
-  resolveStab(actionA, state.wizardA.id);
-  resolveStab(actionB, state.wizardB.id);
-
-  // Tick protection from evil.
-  for (const w of [state.wizardA, state.wizardB]) {
-    if (w.status.protectionFromEvilTurns > 0) {
-      w.status.protectionFromEvilTurns -= 1;
+  // Create summons (subject = targetId = controller)
+  const newMonsters = [];
+  for (const c of pendingSummons) {
+    const controllerId = isWizardId(c.targetId) ? c.targetId : c.casterId;
+    const elemType =
+      c.casterId === state.wizardA.id ? choices.elementalTypeA : choices.elementalTypeB;
+    const m = createMonster(state, c.spell, controllerId, elemType || 'fire');
+    if (m) {
+      newMonsters.push(m);
+      monsterLog[m.id] = { label: m.label, text: 'evocato' };
     }
   }
 
-  return active.filter((c) => !c.cancelled).map((c) => ({
-    spell: c.spell,
-    casterId: c.casterId,
-    targetId: c.targetId,
-    handIndex: c.handIndex,
-  }));
+  // Opposing elementals annihilate
+  const fires = livingMonsters(state).filter((m) => m.elementalType === 'fire');
+  const ices = livingMonsters(state).filter((m) => m.elementalType === 'ice');
+  if (fires.length && ices.length) {
+    for (const m of [...fires, ...ices]) {
+      hurtMonster(m, 999);
+      monsterLog[m.id] = { label: m.label, text: 'annullato' };
+    }
+  }
+
+  function orderTarget(orders, monsterId, controllerId) {
+    const hit = (orders || []).find((o) => o.monsterId === monsterId);
+    if (hit?.targetId) return hit.targetId;
+    return foe(controllerId);
+  }
+
+  // Monster attacks (existing + newly summoned), then apply delayed deaths
+  for (const m of [...livingMonsters(state)]) {
+    const orders =
+      m.controllerId === state.wizardA.id ? choices.monsterOrdersA : choices.monsterOrdersB;
+    let targetId = orderTarget(orders, m.id, m.controllerId);
+    // Newly summoned without explicit order: attack opponent of controller
+    if (newMonsters.includes(m) && !(orders || []).some((o) => o.monsterId === m.id)) {
+      targetId = foe(m.controllerId);
+    }
+
+    // Elemental vs resist
+    if (m.elementalType === 'fire' && isWizardId(targetId)) {
+      const w = wizardById(state, targetId);
+      if (w?.status.resistHeat) {
+        monsterLog[m.id] = { label: m.label, text: 'resist' };
+        continue;
+      }
+    }
+    if (m.elementalType === 'ice' && isWizardId(targetId)) {
+      const w = wizardById(state, targetId);
+      if (w?.status.resistCold) {
+        monsterLog[m.id] = { label: m.label, text: 'resist' };
+        continue;
+      }
+    }
+
+    if (isWizardId(targetId) && shielded.has(targetId)) {
+      monsterLog[m.id] = { label: m.label, text: '🛡' };
+      continue;
+    }
+
+    resolveTargetHit(state, targetId, m.attack, shielded, { ignoreShield: true });
+    const name =
+      isWizardId(targetId)
+        ? (targetId === state.wizardA.id ? state.wizardA.name : state.wizardB.name)
+        : (monsterById(state, targetId)?.label || targetId);
+    monsterLog[m.id] = { label: m.label, text: `→${name}` };
+  }
+
+  if (destroyAllMonstersAfterAttack) {
+    for (const m of livingMonsters(state)) {
+      m.alive = false;
+      m.hp = 0;
+      if (!monsterLog[m.id] || monsterLog[m.id].text === '—' || monsterLog[m.id].text === 'evocato') {
+        monsterLog[m.id] = {
+          label: m.label,
+          text: monsterLog[m.id]?.text === 'evocato' ? 'evocato☠' : 'dispel',
+        };
+      }
+    }
+  }
+  for (const m of state.monsters || []) {
+    if (m._dieAfterAttack) {
+      m.alive = false;
+      m.hp = 0;
+      delete m._dieAfterAttack;
+      monsterLog[m.id] = { label: m.label, text: `${monsterLog[m.id]?.text || '—'}☠` };
+    }
+  }
+
+  // Stab
+  function resolveStab(action, attackerId, stabTarget) {
+    if (action.left.kind !== 'stab' && action.right.kind !== 'stab') return;
+    const targetId = stabTarget || foe(attackerId);
+    resolveTargetHit(state, targetId, 1, shielded);
+  }
+  resolveStab(actionA, state.wizardA.id, choices.stabTargetA);
+  resolveStab(actionB, state.wizardB.id, choices.stabTargetB);
+
+  for (const w of [state.wizardA, state.wizardB]) {
+    if (w.status.protectionFromEvilTurns > 0) w.status.protectionFromEvilTurns -= 1;
+  }
+
+  return {
+    casts: active.filter((c) => !c.cancelled).map((c) => ({
+      spell: c.spell,
+      casterId: c.casterId,
+      targetId: c.targetId,
+      handIndex: c.handIndex,
+    })),
+    monsterLog,
+  };
 }
 
 function createWizard(id, name) {
@@ -453,6 +685,9 @@ export function newGame({ nameA = 'Player A', nameB = 'Player B', allowCharmNoth
     rules: { allowCharmNothing: !!allowCharmNothing },
     wizardA: createWizard('a', nameA),
     wizardB: createWizard('b', nameB),
+    monsters: [],
+    monsterColumns: [],
+    monsterSeq: 0,
   };
   for (const w of [state.wizardA, state.wizardB]) {
     w.status.resistHeat = false;
@@ -470,12 +705,11 @@ function wizardAlive(w) {
 
 export function playTurn(state, actionA, actionB, choices = {}) {
   if (state.finished) {
-    return { state, castsA: [], castsB: [], message: 'Game already finished' };
+    return { state, castsA: [], castsB: [], monsterLog: {}, message: 'Game already finished' };
   }
 
   state.turn += 1;
 
-  // Anti-spell from previous turn: clear gesture history before recording new ones.
   for (const w of [state.wizardA, state.wizardB]) {
     if (w.status.antiSpellNextTurn) {
       w.leftHand.symbols = [];
@@ -487,7 +721,7 @@ export function playTurn(state, actionA, actionB, choices = {}) {
   if (isSurrender(actionA) && isSurrender(actionB)) {
     state.finished = true;
     state.isDraw = true;
-    return { state, castsA: [], castsB: [], surrendered: true, draw: true };
+    return { state, castsA: [], castsB: [], monsterLog: {}, surrendered: true, draw: true };
   }
 
   if (!hasDoubleStab(actionA)) {
@@ -499,10 +733,18 @@ export function playTurn(state, actionA, actionB, choices = {}) {
     recordFromAction(state.wizardB.rightHand, actionB.right, actionB);
   }
 
+  // Attach per-hand spell targets onto cast detection choices via resolveEffects
   const castsA = detectCasts(state.wizardA, choices.leftChoiceA, choices.rightChoiceA);
   const castsB = detectCasts(state.wizardB, choices.leftChoiceB, choices.rightChoiceB);
 
-  const resolved = resolveEffects(state, castsA, castsB, actionA, actionB);
+  const { casts: resolved, monsterLog } = resolveEffects(
+    state,
+    castsA,
+    castsB,
+    actionA,
+    actionB,
+    choices,
+  );
   const resolvedA = resolved.filter((c) => c.casterId === state.wizardA.id);
   const resolvedB = resolved.filter((c) => c.casterId === state.wizardB.id);
 
@@ -525,7 +767,7 @@ export function playTurn(state, actionA, actionB, choices = {}) {
     state.winnerId = state.wizardA.id;
   }
 
-  return { state, castsA: resolvedA, castsB: resolvedB };
+  return { state, castsA: resolvedA, castsB: resolvedB, monsterLog };
 }
 
 function wizardJson(w) {
@@ -540,6 +782,20 @@ function wizardJson(w) {
   };
 }
 
+function monsterJson(m) {
+  return {
+    id: m.id,
+    type: m.type,
+    label: m.label,
+    controllerId: m.controllerId,
+    attack: m.attack,
+    hp: m.hp,
+    maxHp: m.maxHp,
+    alive: m.alive,
+    elementalType: m.elementalType,
+  };
+}
+
 function handActionLabel(action) {
   if (!action) return '—';
   if (action.kind === 'nothing') return '—';
@@ -549,7 +805,11 @@ function handActionLabel(action) {
   return '?';
 }
 
-function historyEntry(turn, actionA, actionB, casts) {
+function historyEntry(turn, actionA, actionB, casts, monsterLog, monsterColumns) {
+  const monsters = {};
+  for (const col of monsterColumns || []) {
+    monsters[col.id] = monsterLog?.[col.id] || { label: col.label, text: '—' };
+  }
   return {
     turn,
     a: { left: handActionLabel(actionA.left), right: handActionLabel(actionA.right) },
@@ -557,8 +817,10 @@ function historyEntry(turn, actionA, actionB, casts) {
     casts: (casts || []).map((c) => ({
       spell: c.spell,
       casterId: c.casterId,
+      targetId: c.targetId,
       handIndex: c.handIndex,
     })),
+    monsters,
   };
 }
 
@@ -586,6 +848,8 @@ export function snapshot(room) {
       [s.wizardA.id]: wizardJson(s.wizardA),
       [s.wizardB.id]: wizardJson(s.wizardB),
     },
+    monsters: (s.monsters || []).map(monsterJson),
+    monsterColumns: s.monsterColumns || [],
     rules: { allowCharmNothing: s.rules.allowCharmNothing },
     joined: {
       a: !!(room.joined && room.joined.a),
@@ -595,7 +859,6 @@ export function snapshot(room) {
       ? { submitted, waitingFor: submitted.includes('a') ? (submitted.includes('b') ? [] : ['b']) : ['a'] }
       : undefined,
     lastTurnCasts: room.lastTurnCasts || [],
-    // newest first for the UI scroll list
     history: [...(room.history || [])].reverse(),
   };
 }
@@ -611,13 +874,33 @@ export function joinRoom(room, playerId, name) {
   return snapshot(room);
 }
 
-export function submitTurnToRoom(room, { playerId, left, right, leftSpell, rightSpell } = {}) {
+export function submitTurnToRoom(room, payload = {}) {
+  const {
+    playerId,
+    left,
+    right,
+    leftSpell,
+    rightSpell,
+    spellTargets,
+    monsterOrders,
+    stabTarget,
+    elementalType,
+  } = payload;
+
   if (room.state.finished) throw new Error('game_finished');
   if (playerId !== 'a' && playerId !== 'b') throw new Error('invalid_player');
   if (room.submitted[playerId]) throw new Error('already_submitted');
 
   const action = parseTurn(left, right);
-  room.submitted[playerId] = action;
+  room.submitted[playerId] = {
+    action,
+    spellTargets: spellTargets || {},
+    monsterOrders: monsterOrders || [],
+    stabTarget: stabTarget || null,
+    elementalType: elementalType || null,
+    leftSpell: leftSpell || null,
+    rightSpell: rightSpell || null,
+  };
   room.lastTurnCasts = [];
   room.joined = room.joined || { a: false, b: false };
   room.joined[playerId] = true;
@@ -627,17 +910,36 @@ export function submitTurnToRoom(room, { playerId, left, right, leftSpell, right
     return snapshot(room);
   }
 
-  const a = room.submitted[ids[0]];
-  const b = room.submitted[ids[1]];
+  const subA = room.submitted[ids[0]];
+  const subB = room.submitted[ids[1]];
   room.submitted = {};
 
-  const result = playTurn(room.state, a, b, {
-    leftChoiceA: leftSpell || null,
-    rightChoiceA: rightSpell || null,
+  const result = playTurn(room.state, subA.action, subB.action, {
+    leftChoiceA: subA.leftSpell,
+    rightChoiceA: subA.rightSpell,
+    leftChoiceB: subB.leftSpell,
+    rightChoiceB: subB.rightSpell,
+    spellTargetA: subA.spellTargets,
+    spellTargetB: subB.spellTargets,
+    monsterOrdersA: subA.monsterOrders,
+    monsterOrdersB: subB.monsterOrders,
+    stabTargetA: subA.stabTarget,
+    stabTargetB: subB.stabTarget,
+    elementalTypeA: subA.elementalType,
+    elementalTypeB: subB.elementalType,
   });
   room.lastTurnCasts = [...result.castsA, ...result.castsB];
   room.history = room.history || [];
-  room.history.push(historyEntry(room.state.turn, a, b, room.lastTurnCasts));
+  room.history.push(
+    historyEntry(
+      room.state.turn,
+      subA.action,
+      subB.action,
+      room.lastTurnCasts,
+      result.monsterLog,
+      room.state.monsterColumns,
+    ),
+  );
   return snapshot(room);
 }
 

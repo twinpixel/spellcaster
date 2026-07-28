@@ -129,4 +129,20 @@ describe('GameService', () => {
     const blocked = svc.submitTurn(snap2.id, { playerId: 'b', left: 'P', right: ' ' });
     expect(blocked.players.b.damage).toBe(0);
   });
+
+  it('summon goblin attacks opponent for 1', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    // S-F-W
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'S', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'F', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'W', right: ' ' });
+    const after = svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    expect(after.monsters.some((m) => m.type === 'goblin' && m.alive)).toBe(true);
+    expect(after.players.b.damage).toBe(1);
+    expect(after.monsterColumns.length).toBe(1);
+    expect(after.history[0].monsters[after.monsterColumns[0].id].text).toMatch(/→/);
+  });
 });
