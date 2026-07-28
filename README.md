@@ -1,76 +1,88 @@
-# Spellcaster Monorepo
+# Spellcaster
 
-Implementazione di **Spellcaster** (*Waving Hands*, Richard Bartle): motore regole Dart, server multiplayer, client Flutter.
+Duello multiplayer di gesti magici (*Waving Hands* / Richard Bartle), su **Cloudflare Worker** + PWA statica — stessa struttura di [Scent Mate](../scent_mate).
 
 ## Struttura
 
 ```
 spellcaster/
-├── docs/RULES.md              # Regolamento fedele a Spellcaster.html
-├── packages/
-│   ├── spellcaster_core/      # Motore regole + test per incantesimo
-│   ├── spellcaster_server/    # Server HTTP + WebSocket
-│   └── spellcaster_client/    # App Flutter
-├── melos.yaml
-└── Spellcaster.html           # Fonte originale (inglese)
+├── client/                 # Frontend statico (HTML/CSS/JS, PWA)
+│   ├── index.html
+│   ├── app.js
+│   ├── styles.css
+│   ├── sw.js
+│   ├── manifest.webmanifest
+│   └── assets/
+├── server/
+│   ├── worker.template.js  # Worker (API)
+│   ├── shared.js           # Motore regole + room service
+│   ├── shared.test.js
+│   └── build.js            # → dist/worker.js
+├── docs/RULES.md
+├── Spellcaster.html        # Fonte originale regole
+├── wrangler.toml
+└── package.json
 ```
 
 ## Requisiti
 
-- Dart SDK ≥ 3.5
-- Flutter ≥ 3.24 (solo per il client)
+- Node.js ≥ 18
+- Account Cloudflare (per deploy)
 
 ## Setup
 
 ```bash
-cd c:\java\pers\spellcaster
-dart pub get
-cd packages/spellcaster_core && dart pub get
-cd ../spellcaster_server && dart pub get
-cd ../spellcaster_client && flutter pub get
+npm install
+cp .dev.vars.example .dev.vars   # opzionale
+npm run icons:generate           # PNG PWA da icon.svg
 ```
 
-Con [melos](https://melos.invertase.dev/) sul PATH:
+## Dev locale
 
 ```bash
-melos bootstrap
-melos run test
+npm run cf:dev
 ```
 
-## Test (ogni incantesimo)
+Apre Wrangler con API + `client/` sullo stesso origin.
+
+## Test
 
 ```bash
-cd packages/spellcaster_core
-dart test                          # tutti (~90 test)
-dart test test/spells/fireball_test.dart   # singolo incantesimo
-dart run tools/generate_spell_tests.dart   # rigenera test/spells/*
+npm test
 ```
 
-## Server
+## Deploy
 
 ```bash
-cd packages/spellcaster_server
-dart run bin/server.dart
-# HTTP http://localhost:8080
-# WebSocket ws://localhost:8080/ws
+npm run cf:deploy
 ```
 
-API:
+CI: push su `main` → `.github/workflows/deploy.yml` (serve `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`).
 
-- `POST /games` — crea partita `{ "playerA": "...", "playerB": "..." }`
-- `GET /games/:id` — stato
-- `POST /games/:id/turn` — invia turno (JSON gesti)
-- WebSocket — aggiornamenti in tempo reale
+## API
 
-## Client Flutter
+| Method | Path | Descrizione |
+|--------|------|-------------|
+| `GET` | `/health` | Healthcheck |
+| `GET` | `/spells` | Catalogo incantesimi |
+| `POST` | `/games` | Crea partita `{ playerA?, playerB? }` |
+| `GET` | `/games/:id` | Snapshot |
+| `POST` | `/games/:id/join` | Entra in partita `{ playerId, name? }` |
+| `POST` | `/games/:id/turn` | Invia turno `{ playerId, left, right }` |
 
-```bash
-cd packages/spellcaster_client
-flutter run -d windows   # o chrome / android
-```
+Gesti: `F P S W D`, `stab`, `C`/`clap`, spazio/`nothing`.
 
-Configura l’URL del server in `lib/config.dart`.
+## Come giocare (UI)
 
-## Regole
+### Due giocatori
+1. **Nuova partita (2 giocatori)** — sei il giocatore A
+2. **Copia** il link e passalo all’avversario
+3. L’altro apre il link ed entra come giocatore B
+4. Ognuno sceglie le mani e preme **Fine turno**; il turno si risolve quando entrambi hanno inviato
 
-Vedi [docs/RULES.md](docs/RULES.md). Il catalogo gesti/incantesimi è in `SpellCatalog` (`packages/spellcaster_core`).
+### Solo
+**Gioca da solo** — l’avversario passa automaticamente.
+
+Regole complete: [docs/RULES.md](docs/RULES.md).
+
+Le partite vivono in un **Durable Object** Cloudflare, così host e ospite condividono lo stesso stato.

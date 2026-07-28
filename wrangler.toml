@@ -1,0 +1,30 @@
+# Spellcaster — Cloudflare Worker (API + PWA statica)
+# Deploy: npm run cf:deploy
+# Dev:    npm run cf:dev
+
+name = "spellcaster-worker"
+main = "dist/worker.js"
+compatibility_date = "2025-06-01"
+
+[assets]
+directory = "./client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = [
+  "/health",
+  "/games",
+  "/games/*",
+  "/spells",
+]
+
+[[durable_objects.bindings]]
+name = "GAME"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GameRoom"]
+
+[vars]
+# "false" disattiva il vincolo same-origin sulle API di gioco.
+REQUIRE_SAME_ORIGIN = "true"

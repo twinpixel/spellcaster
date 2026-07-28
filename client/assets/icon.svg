@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Spellcaster">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8c36a"/>
+      <stop offset="55%" stop-color="#c45c3a"/>
+      <stop offset="100%" stop-color="#6b3fa0"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2a2035"/>
+      <stop offset="100%" stop-color="#141018"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <circle cx="256" cy="230" r="140" fill="rgba(232,195,106,0.12)"/>
+  <path fill="url(#g)" d="M256 72c-10 0-18 8-18 18v28c-72 14-126 78-126 154 0 88 72 160 144 160s144-72 144-160c0-76-54-140-126-154V90c0-10-8-18-18-18zm0 72c54 10 96 58 96 118 0 66-54 120-120 120S112 328 112 262c0-60 42-108 96-118v28c-36 8-64 40-64 80 0 46 38 84 84 84s84-38 84-84c0-40-28-72-64-80v-28z"/>
+  <circle cx="256" cy="262" r="28" fill="#e8c36a"/>
+</svg>

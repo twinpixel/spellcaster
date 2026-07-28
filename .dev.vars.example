@@ -1,0 +1,4 @@
+# Copia in .dev.vars per lo sviluppo locale (npm run cf:dev).
+# Spellcaster non richiede secret per le API di gioco.
+# Esempio (se in futuro aggiungi auth o AI):
+# SOME_API_KEY=your-key-here

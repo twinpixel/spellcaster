@@ -1,0 +1,24 @@
+{
+  "name": "spellcaster",
+  "version": "1.0.0",
+  "description": "Spellcaster (Waving Hands): duello multiplayer via gesti — Cloudflare Worker + PWA statica",
+  "type": "module",
+  "scripts": {
+    "build": "node server/build.js",
+    "build:worker": "node server/build.js",
+    "icons:generate": "node scripts/generate-icons.mjs",
+    "gestures:optimize": "node scripts/optimize-gestures.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cf:dev": "npm run build:worker && wrangler dev",
+    "cf:deploy": "npm run build:worker && wrangler deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.2",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.103.0"
+  }
+}

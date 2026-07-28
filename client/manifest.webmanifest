@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Spellcaster",
+  "short_name": "Spellcaster",
+  "description": "Duello di gesti magici — Waving Hands / Spellcaster.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#1a1520",
+  "theme_color": "#1a1520",
+  "categories": ["games"],
+  "lang": "it",
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
