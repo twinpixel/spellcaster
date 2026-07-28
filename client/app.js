@@ -53,6 +53,50 @@ function randomAiName() {
 
 const SESSION_KEY = 'spellcaster.session';
 const NICK_KEY = 'spellcaster.nickname';
+const SPELL_VIDEO_KEY = 'spellcaster.spellVideos';
+
+/** Titoli come in docs/SPELL_VIDEO_PROMPTS.md (slug = lower + spazi→trattini). */
+const SPELL_VIDEO_TITLE = {
+  shield: 'Shield',
+  removeEnchantment: 'Remove enchantment',
+  magicMirror: 'Magic mirror',
+  counterSpell: 'Counter-spell',
+  dispelMagic: 'Dispel magic',
+  raiseDead: 'Raise dead',
+  cureLightWounds: 'Cure light wounds',
+  cureHeavyWounds: 'Cure heavy wounds',
+  summonGoblin: 'Summon Goblin',
+  summonOgre: 'Summon Ogre',
+  summonTroll: 'Summon Troll',
+  summonGiant: 'Summon Giant',
+  missile: 'Missile',
+  fingerOfDeath: 'Finger of death',
+  lightningBoltLong: 'Lightning bolt',
+  lightningBoltShort: 'Lightning bolt',
+  causeLightWounds: 'Cause light wounds',
+  causeHeavyWounds: 'Cause heavy wounds',
+  fireball: 'Fireball',
+  fireStorm: 'Fire storm',
+  iceStorm: 'Ice storm',
+  amnesia: 'Amnesia',
+  confusion: 'Confusion',
+  charmPerson: 'Charm person',
+  charmMonster: 'Charm monster',
+  paralysis: 'Paralysis',
+  fear: 'Fear',
+  antiSpell: 'Anti-spell',
+  protectionFromEvil: 'Protection from evil',
+  resistHeat: 'Resist heat',
+  resistCold: 'Resist cold',
+  disease: 'Disease',
+  poison: 'Poison',
+  blindness: 'Blindness',
+  invisibility: 'Invisibility',
+  haste: 'Haste',
+  timeStop: 'Time stop',
+  delayedEffect: 'Delayed effect',
+  permanency: 'Permanency',
+};
 
 const state = {
   view: 'welcome', // welcome | nick | duel | spells
@@ -82,7 +126,178 @@ const state = {
   releaseDelayed: false,
   /** @type {{ queue: string[][], spell: string|null, self: boolean }|null} */
   aiPlan: null,
+  spellVideos: loadSpellVideosPref(),
+  /** Chiave ultimo turno già mostrato come clip (evita replay al poll). */
+  lastSpellVideoKey: null,
+  spellVideoBusy: false,
 };
+
+function loadSpellVideosPref() {
+  try {
+    return localStorage.getItem(SPELL_VIDEO_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setSpellVideosPref(on) {
+  state.spellVideos = !!on;
+  try {
+    localStorage.setItem(SPELL_VIDEO_KEY, on ? '1' : '0');
+  } catch {
+    // ignore
+  }
+}
+
+/** Nome file senza estensione: titolo prompt, minuscolo, spazi → trattini. */
+function spellVideoSlug(spellId, game) {
+  if (spellId === 'summonElemental') {
+    const elems = (game?.monsters || []).filter((m) => m.alive && m.elementalType);
+    const mine = elems.find((m) => m.controllerId === state.playerId)
+      || elems[elems.length - 1];
+    const kind = mine?.elementalType === 'ice' ? 'ice' : 'fire';
+    return `elemental-${kind}`;
+  }
+  const title = SPELL_VIDEO_TITLE[spellId];
+  if (!title) return null;
+  return title.toLowerCase().replace(/\s+/g, '-');
+}
+
+function spellVideoUrl(slug) {
+  return `video/${encodeURIComponent(slug)}.mp4`;
+}
+
+function castsVideoKey(game) {
+  if (!game) return null;
+  const casts = game.lastTurnCasts || [];
+  if (!casts.length) return null;
+  return `${game.turn}|${casts.map((c) => c.spell).join(',')}`;
+}
+
+/**
+ * Se i video FX sono attivi, apre il popup per ogni incantesimo del turno
+ * (salta i file mancanti).
+ */
+function maybeShowSpellVideos(game) {
+  if (!state.spellVideos || !game?.lastTurnCasts?.length) return;
+  const key = castsVideoKey(game);
+  if (!key || key === state.lastSpellVideoKey) return;
+  state.lastSpellVideoKey = key;
+
+  const queue = [];
+  const seen = new Set();
+  for (const c of game.lastTurnCasts) {
+    const slug = spellVideoSlug(c.spell, game);
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    let title = SPELL_VIDEO_TITLE[c.spell] || c.spell;
+    if (c.spell === 'summonElemental') {
+      title = slug === 'elemental-ice' ? 'Elemental ice' : 'Elemental fire';
+    }
+    queue.push({ slug, title });
+  }
+  if (queue.length) playSpellVideoQueue(queue);
+}
+
+function playSpellVideoQueue(queue) {
+  if (state.spellVideoBusy || !queue.length) return;
+  state.spellVideoBusy = true;
+
+  const runNext = () => {
+    if (!queue.length) {
+      state.spellVideoBusy = false;
+      return;
+    }
+    const item = queue.shift();
+    const url = spellVideoUrl(item.slug);
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.src = url;
+    const fail = () => {
+      probe.removeAttribute('src');
+      probe.load();
+      runNext();
+    };
+    probe.onerror = fail;
+    probe.onloadeddata = () => {
+      probe.onerror = null;
+      probe.onloadeddata = null;
+      showSpellVideoModal(item, url).then(runNext);
+    };
+  };
+  runNext();
+}
+
+/**
+ * Popup a schermo intero con clip dell’incantesimo.
+ * @returns {Promise<void>}
+ */
+function showSpellVideoModal(item, url) {
+  return new Promise((resolve) => {
+    const existing = document.getElementById('spell-video-modal');
+    if (existing) existing.remove();
+
+    const wrap = document.createElement('div');
+    wrap.id = 'spell-video-modal';
+    wrap.className = 'modal-backdrop spell-video-backdrop';
+    wrap.innerHTML = `
+      <div class="spell-video-sheet" role="dialog" aria-modal="true" aria-label="${escapeHtml(item.title)}">
+        <div class="spell-video-head">
+          <span class="spell-video-title">${escapeHtml(item.title)}</span>
+          <button type="button" class="btn btn-ghost spell-video-close" id="spell-video-close" aria-label="Chiudi">✕</button>
+        </div>
+        <video class="spell-video-player" id="spell-video-player" playsinline controls
+          src="${escapeHtml(url)}"></video>
+        <p class="spell-video-hint" id="spell-video-hint" hidden>Tocca il video per attivare l’audio</p>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+
+    const video = wrap.querySelector('#spell-video-player');
+    const hint = wrap.querySelector('#spell-video-hint');
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try { video.pause(); } catch { /* ignore */ }
+      wrap.remove();
+      resolve();
+    };
+
+    wrap.querySelector('#spell-video-close').onclick = finish;
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) finish();
+    });
+    video.addEventListener('ended', finish);
+    video.addEventListener('error', finish);
+
+    const tryPlay = async () => {
+      try {
+        video.muted = false;
+        await video.play();
+        hint.hidden = true;
+      } catch {
+        try {
+          video.muted = true;
+          await video.play();
+          hint.hidden = false;
+        } catch {
+          hint.hidden = false;
+          hint.textContent = 'Tocca per riprodurre';
+        }
+      }
+    };
+    hint.addEventListener('click', async () => {
+      try {
+        video.muted = false;
+        await video.play();
+        hint.hidden = true;
+      } catch { /* ignore */ }
+    });
+    tryPlay();
+  });
+}
 
 let pollTimer = null;
 
@@ -268,6 +483,7 @@ async function refreshGame() {
       state.right = null;
       if (game.lastTurnCasts?.length) {
         toast(`Incantesimi: ${game.lastTurnCasts.map((c) => c.spell).join(', ')}`);
+        maybeShowSpellVideos(game);
       }
     }
     if (state.playerId === 'a' && !prevJoined && game.joined?.b) {
@@ -375,6 +591,7 @@ async function resumeSession() {
     state.solo = !!sess.solo;
     state.view = 'duel';
     state.waitingSubmit = iAmWaiting();
+    state.lastSpellVideoKey = castsVideoKey(game);
     syncPoll();
     render();
   } catch {
@@ -709,6 +926,7 @@ async function endTurn() {
       ensureDefaultTargets();
       if (game.lastTurnCasts?.length) {
         toast(`Incantesimi: ${game.lastTurnCasts.map((c) => c.spell).join(', ')}`);
+        maybeShowSpellVideos(game);
       }
       const myNew = (game.monsters || []).filter((m) => m.alive && m.controllerId === state.playerId);
       if (myNew.length) toast(`Creature: ${myNew.map((m) => m.label).join(', ')}`);
@@ -804,6 +1022,18 @@ function renderAppBar() {
       leftBar.appendChild(neu);
     }
   }
+
+  const videoToggle = document.createElement('label');
+  videoToggle.className = 'video-fx-toggle';
+  videoToggle.title = 'Mostra clip video quando viene lanciato un incantesimo';
+  videoToggle.innerHTML = `
+    <input type="checkbox" id="spell-video-toggle" ${state.spellVideos ? 'checked' : ''} />
+    <span>Video</span>
+  `;
+  videoToggle.querySelector('input').addEventListener('change', (e) => {
+    setSpellVideosPref(e.target.checked);
+  });
+  rightBar.appendChild(videoToggle);
 
   if (state.view === 'duel') {
     const ref = document.createElement('button');

@@ -6,7 +6,7 @@
  * NB: CACHE_VERSION è generato AUTOMATICAMENTE dal build (server/build.js).
  * ========================================================================= */
 
-const CACHE_VERSION = 'v-2fd428554d';
+const CACHE_VERSION = 'v-6bf7b390c4';
 const CACHE = `spellcaster-${CACHE_VERSION}`;
 
 const PRECACHE = [
@@ -23,7 +23,7 @@ const PRECACHE = [
 ];
 
 const API_PREFIXES = ['/health', '/spells'];
-const NETWORK_ONLY_PREFIXES = ['/games'];
+const NETWORK_ONLY_PREFIXES = ['/games', '/video'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

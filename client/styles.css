@@ -72,6 +72,35 @@ html, body {
 }
 .appbar-right { justify-content: flex-end; }
 
+.video-fx-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.video-fx-toggle:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+.video-fx-toggle input {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+.video-fx-toggle span {
+  font-family: 'Cinzel', Georgia, serif;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
 .app {
   max-width: var(--maxw);
   margin: 0 auto;
@@ -995,6 +1024,58 @@ html, body {
   .modal-sheet {
     border-radius: 16px;
   }
+}
+
+.spell-video-backdrop {
+  align-items: center;
+  z-index: 90;
+}
+
+.spell-video-sheet {
+  width: min(100%, 520px);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spell-video-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.spell-video-title {
+  font-family: 'Cinzel', Georgia, serif;
+  color: var(--accent);
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+}
+
+.spell-video-close {
+  min-width: 36px;
+  padding: 4px 8px;
+}
+
+.spell-video-player {
+  width: 100%;
+  max-height: min(60vh, 420px);
+  border-radius: 10px;
+  background: #000;
+  display: block;
+}
+
+.spell-video-hint {
+  margin: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  cursor: pointer;
 }
 
 .mode-pick {

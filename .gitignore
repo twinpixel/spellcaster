@@ -5,3 +5,5 @@ dist/
 .dev.vars
 *.log
 .DS_Store
+# Copiati da /video al build — non versionare i duplicati
+client/video/

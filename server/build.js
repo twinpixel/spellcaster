@@ -44,7 +44,24 @@ async function stampServiceWorker() {
   return version;
 }
 
+/** Copia `video/` → `client/video/` così Wrangler (assets = client) li serve a `/video/…`. */
+async function syncSpellVideos() {
+  const src = path.join(ROOT, 'video');
+  const dest = path.join(CLIENT_DIR, 'video');
+  await fs.rm(dest, { recursive: true, force: true });
+  try {
+    await fs.access(src);
+  } catch {
+    await fs.mkdir(dest, { recursive: true });
+    return 0;
+  }
+  await fs.cp(src, dest, { recursive: true });
+  const entries = await fs.readdir(dest);
+  return entries.filter((n) => !n.startsWith('.')).length;
+}
+
 async function main() {
+  const videoCount = await syncSpellVideos();
   const [template, statusSrc, shared] = await Promise.all([
     fs.readFile(TEMPLATE_PATH, 'utf-8'),
     fs.readFile(STATUS_PATH, 'utf-8'),
@@ -72,6 +89,7 @@ async function main() {
   const stats = await fs.stat(OUTPUT_PATH);
   console.log(`Scritto ${path.relative(ROOT, OUTPUT_PATH)} (${(stats.size / 1024).toFixed(1)} KB)`);
   console.log(`Service worker CACHE_VERSION: ${swVersion}`);
+  console.log(`Clip incantesimi sincronizzati in client/video/: ${videoCount}`);
 }
 
 main().catch((err) => {
