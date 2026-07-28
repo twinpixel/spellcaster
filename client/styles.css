@@ -235,6 +235,7 @@ html, body {
   justify-content: space-between;
   margin-bottom: 10px;
   gap: 6px;
+  min-height: 28px;
 }
 
 .hand-head h2 {
@@ -242,6 +243,7 @@ html, body {
   font-family: 'Cinzel', Georgia, serif;
   font-size: 0.9rem;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .chip {
@@ -251,7 +253,11 @@ html, body {
   border: 1px solid var(--line);
   color: var(--text-soft);
   background: rgba(0, 0, 0, 0.2);
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  max-width: 7.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chip.ready {
   color: var(--ok);
@@ -263,12 +269,17 @@ html, body {
   flex-wrap: wrap;
   gap: 6px;
   justify-content: center;
+  min-height: 110px;
+  align-content: flex-start;
 }
 
 .hand-preview {
   display: flex;
   justify-content: center;
+  align-items: center;
+  height: 88px;
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .gesture-thumb {
@@ -280,6 +291,7 @@ html, body {
   overflow: hidden;
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.35);
+  box-sizing: border-box;
 }
 
 .gesture-thumb img {
@@ -318,29 +330,48 @@ html, body {
 
 .gesture-thumb.empty,
 .gesture.empty {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.25);
 }
 
-.gesture-thumb.empty .gesture-letter,
+.gesture-thumb.empty .gesture-letter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.4rem;
+  right: auto;
+  bottom: auto;
+  padding: 0;
+}
+
 .gesture.empty .gesture-letter {
-  position: static;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   color: var(--muted);
   font-size: 1.1rem;
+  right: auto;
+  bottom: auto;
+  padding: 0;
 }
 
 .gesture-thumb.preview {
-  width: 72px;
-  height: 72px;
   opacity: 0.55;
 }
 
 .gesture-thumb.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(232, 195, 106, 0.35);
+  outline: 1px solid rgba(232, 195, 106, 0.45);
+  outline-offset: 0;
 }
 
 .gesture {
@@ -358,6 +389,8 @@ html, body {
   font-size: 0.9rem;
   cursor: pointer;
   overflow: hidden;
+  box-sizing: border-box;
+  flex: 0 0 52px;
 }
 
 .gesture img {
@@ -382,7 +415,8 @@ html, body {
 
 .gesture.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(232, 195, 106, 0.35);
+  outline: 2px solid rgba(232, 195, 106, 0.45);
+  outline-offset: 0;
 }
 
 .gesture.selected .gesture-letter {
@@ -399,6 +433,13 @@ html, body {
   .gesture {
     width: 44px;
     height: 44px;
+    flex-basis: 44px;
+  }
+  .gestures {
+    min-height: 94px;
+  }
+  .hand-preview {
+    height: 72px;
   }
   .gesture-thumb {
     width: 72px;
