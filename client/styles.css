@@ -665,12 +665,20 @@ html, body {
 }
 
 .history-cast-cell {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   color: var(--accent-cool);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  text-align: left;
+  padding: 0 2px;
+}
+
+.history-cast-cell.me,
+.history-head .history-cast-cell.me {
+  color: var(--accent);
 }
 
 .history-casts {
@@ -987,4 +995,20 @@ html, body {
   .modal-sheet {
     border-radius: 16px;
   }
+}
+
+.mode-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 20rem;
+  margin: 0 auto;
+}
+
+.mode-hint {
+  margin: 16px auto 0;
+  max-width: 22rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
