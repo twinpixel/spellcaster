@@ -220,7 +220,6 @@ export function detectCasts(wizard, leftChoice, rightChoice) {
     casts.push({
       spell: chooseSpell(leftMatches, leftChoice),
       casterId: wizard.id,
-      targetId: wizard.id,
       handIndex: 0,
     });
   }
@@ -228,11 +227,204 @@ export function detectCasts(wizard, leftChoice, rightChoice) {
     casts.push({
       spell: chooseSpell(rightMatches, rightChoice),
       casterId: wizard.id,
-      targetId: wizard.id,
       handIndex: 1,
     });
   }
   return casts;
+}
+
+/** Spells that by default target the opponent. */
+const DAMAGING_SPELLS = new Set([
+  'missile',
+  'fingerOfDeath',
+  'lightningBoltLong',
+  'lightningBoltShort',
+  'causeLightWounds',
+  'causeHeavyWounds',
+  'fireball',
+  'fireStorm',
+  'iceStorm',
+]);
+
+function defaultTarget(spell, casterId, opponentId) {
+  if (DAMAGING_SPELLS.has(spell)) return opponentId;
+  return casterId;
+}
+
+function applyDamage(wizard, amount) {
+  if (amount >= 999) {
+    wizard.damage = WIZARD_MAX_DAMAGE + 1;
+    return;
+  }
+  wizard.damage = Math.min(99, wizard.damage + amount);
+}
+
+function applyCure(wizard, amount) {
+  wizard.damage = Math.max(0, wizard.damage - amount);
+}
+
+function wizardById(state, id) {
+  return id === state.wizardA.id ? state.wizardA : state.wizardB;
+}
+
+function opponentId(state, id) {
+  return id === state.wizardA.id ? state.wizardB.id : state.wizardA.id;
+}
+
+/**
+ * Resolve casts + stabs for the turn. Mutates wizards' damage/status.
+ * Simplified simultaneous resolution covering damage, cures, shield, stab.
+ */
+export function resolveEffects(state, castsA, castsB, actionA, actionB) {
+  const all = [
+    ...castsA.map((c) => ({
+      ...c,
+      targetId: c.targetId || defaultTarget(c.spell, c.casterId, opponentId(state, c.casterId)),
+    })),
+    ...castsB.map((c) => ({
+      ...c,
+      targetId: c.targetId || defaultTarget(c.spell, c.casterId, opponentId(state, c.casterId)),
+    })),
+  ];
+
+  const active = all.map((c) => ({ ...c, cancelled: false }));
+
+  const hasDispel = active.some((c) => c.spell === 'dispelMagic' && !c.cancelled);
+  if (hasDispel) {
+    for (const c of active) {
+      if (c.spell !== 'dispelMagic') c.cancelled = true;
+    }
+  }
+
+  // Counter-spell on a subject cancels other spells targeting them (not dispel / fingerOfDeath).
+  const countered = new Set(
+    active.filter((c) => c.spell === 'counterSpell' && !c.cancelled).map((c) => c.targetId),
+  );
+  for (const c of active) {
+    if (c.cancelled) continue;
+    if (c.spell === 'counterSpell' || c.spell === 'dispelMagic' || c.spell === 'fingerOfDeath') continue;
+    if (countered.has(c.targetId)) c.cancelled = true;
+  }
+
+  // Mirror: reflect damaging single-target spells (missile / lightning) back to caster.
+  const mirrored = new Set(
+    active.filter((c) => c.spell === 'magicMirror' && !c.cancelled).map((c) => c.targetId),
+  );
+  for (const c of active) {
+    if (c.cancelled) continue;
+    if (!['missile', 'lightningBoltLong', 'lightningBoltShort'].includes(c.spell)) continue;
+    if (mirrored.has(c.targetId) && !countered.has(c.targetId)) {
+      c.targetId = c.casterId;
+    }
+  }
+
+  // Shield / counter / protection this turn (also counter final gesture = shield).
+  const shielded = new Set();
+  for (const c of active) {
+    if (c.cancelled) continue;
+    if (c.spell === 'shield' || c.spell === 'counterSpell' || c.spell === 'dispelMagic' || c.spell === 'protectionFromEvil') {
+      shielded.add(c.targetId);
+    }
+  }
+  for (const w of [state.wizardA, state.wizardB]) {
+    if (w.status.protectionFromEvilTurns > 0) shielded.add(w.id);
+  }
+
+  // Apply remaining spell effects.
+  for (const c of active) {
+    if (c.cancelled) continue;
+    const target = wizardById(state, c.targetId);
+    const caster = wizardById(state, c.casterId);
+
+    switch (c.spell) {
+      case 'missile':
+        if (!shielded.has(target.id)) applyDamage(target, 1);
+        break;
+      case 'fingerOfDeath':
+        applyDamage(target, 999);
+        break;
+      case 'lightningBoltLong':
+        applyDamage(target, 5);
+        break;
+      case 'lightningBoltShort':
+        if (!caster.usedShortLightning) {
+          caster.usedShortLightning = true;
+          applyDamage(target, 5);
+        }
+        break;
+      case 'causeLightWounds':
+        applyDamage(target, 2);
+        break;
+      case 'causeHeavyWounds':
+        applyDamage(target, 3);
+        break;
+      case 'fireball':
+        if (!target.status.resistHeat) applyDamage(target, 5);
+        break;
+      case 'fireStorm':
+        for (const w of [state.wizardA, state.wizardB]) {
+          if (!w.status.resistHeat) applyDamage(w, 5);
+        }
+        break;
+      case 'iceStorm':
+        for (const w of [state.wizardA, state.wizardB]) {
+          if (!w.status.resistCold) applyDamage(w, 5);
+        }
+        break;
+      case 'cureLightWounds':
+        applyCure(target, 1);
+        break;
+      case 'cureHeavyWounds':
+        applyCure(target, 2);
+        break;
+      case 'raiseDead':
+        if (target.damage > WIZARD_MAX_DAMAGE) {
+          target.damage = 0;
+        } else {
+          applyCure(target, 5);
+        }
+        break;
+      case 'resistHeat':
+        target.status.resistHeat = true;
+        break;
+      case 'resistCold':
+        target.status.resistCold = true;
+        break;
+      case 'protectionFromEvil':
+        target.status.protectionFromEvilTurns = 4;
+        shielded.add(target.id);
+        break;
+      case 'antiSpell':
+        target.status.antiSpellNextTurn = true;
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Stab: 1 damage, blocked by shield-equivalent; one dagger per wizard.
+  function resolveStab(action, attackerId) {
+    if (action.left.kind !== 'stab' && action.right.kind !== 'stab') return;
+    const victimId = opponentId(state, attackerId);
+    if (shielded.has(victimId)) return;
+    applyDamage(wizardById(state, victimId), 1);
+  }
+  resolveStab(actionA, state.wizardA.id);
+  resolveStab(actionB, state.wizardB.id);
+
+  // Tick protection from evil.
+  for (const w of [state.wizardA, state.wizardB]) {
+    if (w.status.protectionFromEvilTurns > 0) {
+      w.status.protectionFromEvilTurns -= 1;
+    }
+  }
+
+  return active.filter((c) => !c.cancelled).map((c) => ({
+    spell: c.spell,
+    casterId: c.casterId,
+    targetId: c.targetId,
+    handIndex: c.handIndex,
+  }));
 }
 
 function createWizard(id, name) {
@@ -243,7 +435,12 @@ function createWizard(id, name) {
     leftHand: emptyHand(),
     rightHand: emptyHand(),
     usedShortLightning: false,
-    status: { antiSpellNextTurn: false, resistHeat: false, resistCold: false },
+    status: {
+      antiSpellNextTurn: false,
+      resistHeat: false,
+      resistCold: false,
+      protectionFromEvilTurns: 0,
+    },
   };
 }
 
@@ -278,6 +475,15 @@ export function playTurn(state, actionA, actionB, choices = {}) {
 
   state.turn += 1;
 
+  // Anti-spell from previous turn: clear gesture history before recording new ones.
+  for (const w of [state.wizardA, state.wizardB]) {
+    if (w.status.antiSpellNextTurn) {
+      w.leftHand.symbols = [];
+      w.rightHand.symbols = [];
+      w.status.antiSpellNextTurn = false;
+    }
+  }
+
   if (isSurrender(actionA) && isSurrender(actionB)) {
     state.finished = true;
     state.isDraw = true;
@@ -295,6 +501,10 @@ export function playTurn(state, actionA, actionB, choices = {}) {
 
   const castsA = detectCasts(state.wizardA, choices.leftChoiceA, choices.rightChoiceA);
   const castsB = detectCasts(state.wizardB, choices.leftChoiceB, choices.rightChoiceB);
+
+  const resolved = resolveEffects(state, castsA, castsB, actionA, actionB);
+  const resolvedA = resolved.filter((c) => c.casterId === state.wizardA.id);
+  const resolvedB = resolved.filter((c) => c.casterId === state.wizardB.id);
 
   const deadA = !wizardAlive(state.wizardA);
   const deadB = !wizardAlive(state.wizardB);
@@ -315,7 +525,7 @@ export function playTurn(state, actionA, actionB, choices = {}) {
     state.winnerId = state.wizardA.id;
   }
 
-  return { state, castsA, castsB };
+  return { state, castsA: resolvedA, castsB: resolvedB };
 }
 
 function wizardJson(w) {

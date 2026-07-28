@@ -93,4 +93,40 @@ describe('GameService', () => {
     expect(after.history[1].turn).toBe(1);
     expect(after.history[1].a.left).toBe('S');
   });
+
+  it('applies missile damage to the opponent', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'S', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'D', right: ' ' });
+    const after = svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    expect(after.players.b.damage).toBe(1);
+    expect(after.players.a.damage).toBe(0);
+    expect(after.lastTurnCasts.some((c) => c.spell === 'missile' && c.targetId === 'b')).toBe(true);
+  });
+
+  it('shield blocks missile', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'S', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'D', right: ' ' });
+    const after = svc.submitTurn(snap.id, { playerId: 'b', left: 'P', right: ' ' });
+    expect(after.players.b.damage).toBe(0);
+    expect(after.lastTurnCasts.some((c) => c.spell === 'shield')).toBe(true);
+  });
+
+  it('stab deals 1 damage unless shielded', () => {
+    const svc = createGameService();
+    const snap = svc.createGame();
+    svc.submitTurn(snap.id, { playerId: 'a', left: 'stab', right: ' ' });
+    const after = svc.submitTurn(snap.id, { playerId: 'b', left: ' ', right: ' ' });
+    expect(after.players.b.damage).toBe(1);
+
+    const snap2 = svc.createGame();
+    svc.submitTurn(snap2.id, { playerId: 'a', left: 'stab', right: ' ' });
+    const blocked = svc.submitTurn(snap2.id, { playerId: 'b', left: 'P', right: ' ' });
+    expect(blocked.players.b.damage).toBe(0);
+  });
 });
