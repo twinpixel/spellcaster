@@ -1,10 +1,35 @@
-# I maghi avversari e le loro fasce
+# I maghi avversari, le fasce e le personalità
 
-Il computer non gioca sempre allo stesso modo: scegli **chi** vuoi sfidare e con
-lui scegli **quanto forte** gioca. I 25 maghi sono divisi in 4 fasce, e
-l'assegnazione segue quanto sono potenti nelle rispettive storie.
+Il computer non gioca sempre allo stesso modo. Scegliendo **chi** sfidare scegli
+due cose insieme:
 
-Il roster e le fasce stanno in [`client/ai.js`](../client/ai.js) (`AI_TIERS`).
+- **quanto bene gioca** — 5 fasce di abilità, assegnate secondo quanto ogni mago
+  è potente nella sua storia;
+- **come gioca** — una personalità che ne sposta le preferenze (aggressore,
+  difensore, evocatore, ammaliatore, avvelenatore).
+
+In cima c'è **PoltroMago**, che non ha personalità: gioca la mossa migliore e
+basta. È l'unico gioco davvero perfetto.
+
+Roster, fasce e stili stanno in [`client/ai.js`](../client/ai.js).
+
+---
+
+## Le personalità
+
+Il bias è **percettibile**: sposta il valore degli incantesimi del 30–90% per
+sezione, e fino a ×3 su alcuni prediletti. Si applica però **prima** dei bonus
+difensivi e del colpo di grazia, quindi un Difensore non rinuncia a chiudere la
+partita e un Aggressore para comunque il colpo che lo ucciderebbe.
+
+| Stile | Predilige | Incantesimo più lanciato (misurato) |
+|-------|-----------|--------------------------------------|
+| **Aggressore** | danno diretto | Lightning bolt |
+| **Difensore** | scudo, counter, cure | Counter-spell |
+| **Evocatore** | creature | Summon ogre / troll |
+| **Ammaliatore** | enchantment mentali | Paralysis |
+| **Avvelenatore** | malattia e veleno | Disease |
+| **Completo** | nessuna preferenza | — |
 
 ---
 
@@ -58,7 +83,9 @@ al prossimo gesto e si difende di conseguenza. Sbaglia un turno su dieci.
 *Gioco quasi perfetto. Non sbaglia un gesto.*
 
 Nessun errore volontario, repertorio completo, valuta tutte e 64 le combinazioni
-di mani a ogni turno. Non si arrende mai per distrazione.
+di mani a ogni turno. Non si arrende mai per distrazione. Ha però una
+personalità marcata, quindi non gioca la mossa assolutamente migliore: gioca la
+migliore *nel suo stile*.
 
 | Mago | Perché è qui |
 |------|--------------|
@@ -67,6 +94,15 @@ di mani a ogni turno. Non si arrende mai per distrazione.
 | Circe | «La più potente e la dea della magia» fra le maghe classiche |
 | Elminster | Prescelto di Mystra, considerato sopra Mordenkainen |
 | Raistlin | Salì fino a minacciare gli dèi, col potere di Fistandantilus dentro |
+
+## ✦✦✦✦✦ PoltroMago — livello 5
+
+*Gioco perfetto. Nessuna preferenza, nessun errore, nessuna pietà.*
+
+L'autore in persona. Unico della sua fascia, unico **senza personalità**: nessun
+bias a distrarlo dalla mossa migliore. In più guarda più lontano degli altri
+(sconta meno i piani lunghi), quindi porta a termine incantesimi che le fasce
+inferiori non raggiungono mai.
 
 ---
 
@@ -84,7 +120,8 @@ Uno solo, usato peggio dalle fasce basse. A ogni turno:
 3. **Valuta tutte le 64 combinazioni** di mani, sommando il valore degli
    incantesimi che si completano e quello delle sequenze che avanzano, con
    penalità per i gesti sprecati e per le sequenze buttate via.
-4. Scarta sempre `P`+`P` (resa) e la doppia pugnalata.
+4. Applica la **personalità** al valore base (non alle decisioni critiche).
+5. Scarta sempre `P`+`P` (resa) e la doppia pugnalata.
 
 I pattern degli incantesimi **non sono duplicati**: vengono letti da `GET /spells`,
 cioè dal catalogo del server. Un test verifica che coincidano con `SPELL_PATTERNS`.
@@ -94,16 +131,17 @@ cioè dal catalogo del server. Un test verifica che coincidano con `SPELL_PATTER
 Torneo di 60 partite per accoppiamento sul motore vero (percentuale di vittorie
 della fascia in riga):
 
-|        | vs L1 | vs L2 | vs L3 | vs L4 |
-|--------|-------|-------|-------|-------|
-| **L1** |  42%  |   3%  |   2%  |   0%  |
-| **L2** |  95%  |  47%  |   7%  |   8%  |
-| **L3** |  95%  |  82%  |  43%  |  20%  |
-| **L4** | 100%  |  92%  |  60%  |   0%  |
+|        | vs L1 | vs L2 | vs L3 | vs L4 | vs L5 |
+|--------|-------|-------|-------|-------|-------|
+| **L1** |  42%  |   6%  |   4%  |   0%  |   0%  |
+| **L2** |  90%  |  44%  |  18%  |   2%  |   0%  |
+| **L3** |  96%  |  86%  |  48%  |  12%  |   4%  |
+| **L4** |  96%  |  94%  |  54%  |   0%  |   0%  |
+| **L5** | 100%  | 100%  |  94%  | 100%  |   0%  |
 
-L'Arcimago contro sé stesso pareggia sempre: due giocatori deterministici e
-identici si rispecchiano: è il risultato corretto per il gioco perfetto.
-Chiude le partite in circa 15 turni contro i 47 dell'Apprendista.
+PoltroMago **non perde mai** contro l'Arcimago. Contro sé stesso pareggia
+sempre: due giocatori deterministici e identici si rispecchiano mossa per
+mossa, ed è il risultato corretto per il gioco perfetto.
 
 ---
 

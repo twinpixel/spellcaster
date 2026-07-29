@@ -1333,3 +1333,38 @@ html, body {
   font-size: 0.85rem;
   line-height: 1.4;
 }
+
+/* Personalità del mago, sotto il nome nella scelta avversario */
+.wizard-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  line-height: 1.25;
+}
+
+.wizard-style {
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wizard-chip:hover:not(:disabled) .wizard-style,
+.wizard-chip:focus-visible .wizard-style {
+  color: var(--accent);
+}
+
+/* La fascia del gioco perfetto si vede da lontano */
+.tier-poltromago {
+  border-color: rgba(196, 92, 58, 0.6);
+  background: linear-gradient(180deg, rgba(196, 92, 58, 0.1), var(--card));
+}
+
+.tier-poltromago .tier-rank {
+  color: var(--accent-deep);
+}
+
+.tier-poltromago .wizard-chip {
+  border-color: rgba(196, 92, 58, 0.5);
+}

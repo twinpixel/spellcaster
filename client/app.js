@@ -600,6 +600,7 @@ async function ensureAiBook() {
 function aiPickTurn(game, playerId = 'b') {
   return chooseAiTurn(game, {
     level: state.aiLevel || 1,
+    style: aiWizardByName(state.aiWizard)?.style || null,
     playerId,
     book: state.aiBook || [],
   });
@@ -1050,7 +1051,9 @@ function renderWelcome() {
       <div class="tier-wizards">
         ${t.wizards.map((w) => `
           <button type="button" class="wizard-chip" data-wizard="${escapeHtml(w.name)}"
-            title="${escapeHtml(w.note)}" ${state.loading ? 'disabled' : ''}>${escapeHtml(w.name)}</button>
+            title="${escapeHtml(w.note)}${w.style ? ` · ${AI_STYLES[w.style].label}: ${AI_STYLES[w.style].hint}` : ''}"
+            ${state.loading ? 'disabled' : ''}>${escapeHtml(w.name)}${w.style && w.style !== 'completo'
+              ? `<span class="wizard-style">${escapeHtml(AI_STYLES[w.style].label)}</span>` : ''}</button>
         `).join('')}
       </div>
     </section>
@@ -1068,7 +1071,7 @@ function renderWelcome() {
 
     <section class="choose-foe">
       <h2 class="choose-title">Scegli il tuo avversario</h2>
-      <p class="choose-hint">Più stelle, più è forte. L’Arcimago non perdona un gesto sprecato.</p>
+      <p class="choose-hint">Più stelle, più è forte. Ognuno ha il suo stile — tranne PoltroMago, che gioca e basta.</p>
       ${tiers}
     </section>
 
@@ -1621,7 +1624,9 @@ function renderDuel() {
           </div>
           <div class="score-card">
             <div class="name">${escapeHtml(opp.name)}</div>
-            ${state.solo ? `<span class="foe-tier">${escapeHtml(aiTierByLevel(state.aiLevel).label)}</span>` : ''}
+            ${state.solo ? `<span class="foe-tier">${escapeHtml(aiTierByLevel(state.aiLevel).label)}${
+              aiWizardByName(state.aiWizard)?.style && aiWizardByName(state.aiWizard).style !== 'completo'
+                ? ` · ${AI_STYLES[aiWizardByName(state.aiWizard).style].label}` : ''}</span>` : ''}
             <div class="hp" title="Punti vita">${wizardHp(opp.damage)}</div>
             ${statusBadges(opp.status)}
           </div>

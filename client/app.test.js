@@ -61,6 +61,8 @@ const EXPORTS = [
   'aiRemaining',
   'aiIncomingThreats',
   'chooseAiTurn',
+  'AI_STYLES',
+  'aiStyleWeight',
   'AUTHOR_NAME',
   'AUTHOR_URL',
   'AUTHOR_URL_LABEL',
@@ -639,8 +641,8 @@ describe('polling', () => {
 // --- IA --------------------------------------------------------------------
 
 describe('roster dei maghi', () => {
-  it('quattro fasce, ogni mago in una sola, tutti con nota', () => {
-    expect(app.AI_TIERS.map((t) => t.level)).toEqual([1, 2, 3, 4]);
+  it('cinque fasce, ogni mago in una sola, tutti con nota', () => {
+    expect(app.AI_TIERS.map((t) => t.level)).toEqual([1, 2, 3, 4, 5]);
     const nomi = app.AI_WIZARDS.map((w) => w.name);
     expect(new Set(nomi).size).toBe(nomi.length); // nessun nome ripetuto
     // e nemmeno lo stesso personaggio sotto due nomi («Radagast il Bruno»)
@@ -648,13 +650,36 @@ describe('roster dei maghi', () => {
     expect(new Set(radice).size).toBe(radice.length);
     for (const w of app.AI_WIZARDS) {
       expect(w.note.length).toBeGreaterThan(5);
-      expect([1, 2, 3, 4]).toContain(w.level);
+      expect([1, 2, 3, 4, 5]).toContain(w.level);
     }
     expect(app.AI_WIZARDS.length).toBeGreaterThanOrEqual(20);
   });
 
-  it('ogni fascia ha almeno quattro maghi', () => {
-    for (const t of app.AI_TIERS) expect(t.wizards.length).toBeGreaterThanOrEqual(4);
+  it('ogni fascia ha maghi e la quinta è solo PoltroMago', () => {
+    for (const t of app.AI_TIERS.filter((x) => x.level < 5)) {
+      expect(t.wizards.length).toBeGreaterThanOrEqual(4);
+    }
+    const top = app.aiTierByLevel(5);
+    expect(top.wizards.map((w) => w.name)).toEqual(['PoltroMago']);
+    expect(top.wizards[0].style).toBe(null); // il gioco perfetto non ha preferenze
+  });
+
+  it('ogni mago sotto la quinta fascia ha una personalità nota', () => {
+    for (const w of app.AI_WIZARDS.filter((x) => x.level < 5)) {
+      expect(Object.keys(app.AI_STYLES)).toContain(w.style);
+    }
+  });
+
+  it('i pesi delle personalità puntano dove promettono', () => {
+    const w = (style, id, sec) => app.aiStyleWeight(style, id, sec);
+    expect(w('aggressore', 'lightningBoltLong', 'damaging')).toBeGreaterThan(1.5);
+    expect(w('aggressore', 'shield', 'protection')).toBeLessThan(1);
+    expect(w('difensore', 'counterSpell', 'protection')).toBeGreaterThan(1.5);
+    expect(w('evocatore', 'summonTroll', 'summons')).toBeGreaterThan(2);
+    expect(w('ammaliatore', 'charmPerson', 'enchantment')).toBeGreaterThan(2);
+    expect(w('avvelenatore', 'poison', 'enchantment')).toBeGreaterThan(2);
+    expect(w('completo', 'missile', 'damaging')).toBe(1);
+    expect(w(null, 'missile', 'damaging')).toBe(1); // PoltroMago: nessun bias
   });
 
   it('i pezzi grossi stanno in cima e i comprimari in fondo', () => {
@@ -668,11 +693,12 @@ describe('roster dei maghi', () => {
     expect(lvl('Elminster')).toBeGreaterThan(lvl('Mordenkainen'));
     expect(lvl('Merlino')).toBe(4);
     expect(lvl('Alatar')).toBe(1);
-    expect(lvl('Pallando')).toBe(1);
+    expect(lvl('PoltroMago')).toBe(5);
+    expect(lvl('PoltroMago')).toBeGreaterThan(lvl('Merlino'));
   });
 
   it('aiRandomWizard rispetta la fascia richiesta', () => {
-    for (let lv = 1; lv <= 4; lv++) {
+    for (let lv = 1; lv <= 5; lv++) {
       for (let i = 0; i < 20; i++) expect(app.aiRandomWizard(lv).level).toBe(lv);
     }
   });
@@ -765,8 +791,8 @@ describe('cervello IA · scelte', () => {
 
   it('non si arrende mai per sbaglio, a nessuna fascia', () => {
     const { snap } = partita();
-    for (let lv = 1; lv <= 4; lv++) {
-      for (let i = 0; i < 150; i++) {
+    for (let lv = 1; lv <= 5; lv++) {
+      for (let i = 0; i < 120; i++) {
         const t = app.chooseAiTurn(snap, { level: lv, playerId: 'b', book: book() });
         expect(t.left === 'P' && t.right === 'P').toBe(false);
         expect(t.left === 'stab' && t.right === 'stab').toBe(false);
@@ -777,8 +803,8 @@ describe('cervello IA · scelte', () => {
   it('produce sempre gesti che il server accetta', () => {
     const codes = new Set(app.HAND_OPTIONS.map((o) => o.code));
     const { snap } = partita();
-    for (let lv = 1; lv <= 4; lv++) {
-      for (let i = 0; i < 60; i++) {
+    for (let lv = 1; lv <= 5; lv++) {
+      for (let i = 0; i < 50; i++) {
         const t = app.chooseAiTurn(snap, { level: lv, playerId: 'b', book: book() });
         expect(codes.has(t.left)).toBe(true);
         expect(codes.has(t.right)).toBe(true);
@@ -803,7 +829,7 @@ describe('cervello IA · scelte', () => {
   });
 
   it('i turni dell’IA sono giocabili dal motore vero, a ogni fascia', () => {
-    for (let lv = 1; lv <= 4; lv++) {
+    for (let lv = 1; lv <= 5; lv++) {
       const { svc, id } = partita();
       let game = svc.getGame(id);
       for (let i = 0; i < 30 && !game.finished; i++) {
@@ -820,15 +846,15 @@ describe('cervello IA · le fasce alte giocano meglio', () => {
   const book = () => app.buildSpellBook(spellListJson());
 
   /** Duello IA contro IA fino alla fine o al limite di turni. */
-  function duello(levelA, levelB, maxTurni = 60) {
+  function duello(levelA, levelB, maxTurni = 60, styleA = null, styleB = null) {
     const svc = createGameService();
     const snap = svc.createGame({ nameA: 'A', nameB: 'B' });
     svc.joinGame(snap.id, 'b', 'B');
     let game = svc.getGame(snap.id);
     const b = book();
     for (let i = 0; i < maxTurni && !game.finished; i++) {
-      const ta = app.chooseAiTurn(game, { level: levelA, playerId: 'a', book: b });
-      const tb = app.chooseAiTurn(game, { level: levelB, playerId: 'b', book: b });
+      const ta = app.chooseAiTurn(game, { level: levelA, style: styleA, playerId: 'a', book: b });
+      const tb = app.chooseAiTurn(game, { level: levelB, style: styleB, playerId: 'b', book: b });
       try {
         svc.submitTurn(snap.id, { playerId: 'a', ...ta });
         game = svc.submitTurn(snap.id, { playerId: 'b', ...tb });
@@ -840,15 +866,20 @@ describe('cervello IA · le fasce alte giocano meglio', () => {
   }
 
   it('la scala delle fasce è monotòna: ognuna batte quella sotto', () => {
-    const percentuale = (a, b, n = 10) => {
+    // Misure statistiche: campioni ampi e soglie con margine sul valore atteso
+    // (dal torneo da 50 partite: 2v1 90%, 3v2 86%, 4v3 54%, 5v4 100%).
+    const percentuale = (a, b, n = 24) => {
       let win = 0;
       for (let i = 0; i < n; i++) if (duello(a, b, 40).winnerId === 'a') win += 1;
       return win / n;
     };
     expect(percentuale(2, 1)).toBeGreaterThan(0.6);
     expect(percentuale(3, 2)).toBeGreaterThan(0.55);
-    expect(percentuale(4, 3)).toBeGreaterThan(0.4);
-    expect(percentuale(4, 1)).toBeGreaterThan(0.8);
+    expect(percentuale(4, 3)).toBeGreaterThan(0.25);
+    expect(percentuale(4, 1)).toBeGreaterThan(0.75);
+    // PoltroMago sta sopra a tutti
+    expect(percentuale(5, 4)).toBeGreaterThan(0.75);
+    expect(percentuale(5, 1)).toBeGreaterThan(0.85);
   });
 
   it('l’arcimago stravince contro l’apprendista', () => {
@@ -883,5 +914,80 @@ describe('cervello IA · le fasce alte giocano meglio', () => {
       return tot;
     };
     expect(danno(4)).toBeGreaterThan(danno(1));
+  });
+});
+
+describe('cervello IA · le personalità si vedono in partita', () => {
+  const book = () => app.buildSpellBook(spellListJson());
+
+  /** Incantesimi lanciati da «a» in N partite, contati per sezione. */
+  function mixDiLanci(style, partite = 6) {
+    const b = book();
+    const sezione = new Map(b.map((s) => [s.id, s.section]));
+    const tot = { damaging: 0, summons: 0, enchantment: 0, protection: 0 };
+    const perSpell = {};
+    for (let n = 0; n < partite; n++) {
+      const svc = createGameService();
+      const snap = svc.createGame({ nameA: 'A', nameB: 'B' });
+      svc.joinGame(snap.id, 'b', 'B');
+      let game = svc.getGame(snap.id);
+      for (let i = 0; i < 40 && !game.finished; i++) {
+        const ta = app.chooseAiTurn(game, { level: 4, style, playerId: 'a', book: b });
+        const tb = app.chooseAiTurn(game, { level: 2, playerId: 'b', book: b });
+        try {
+          svc.submitTurn(snap.id, { playerId: 'a', ...ta });
+          game = svc.submitTurn(snap.id, { playerId: 'b', ...tb });
+        } catch { break; }
+        for (const c of game.lastTurnCasts || []) {
+          if (c.casterId !== 'a') continue;
+          const sec = sezione.get(c.spell);
+          if (sec in tot) tot[sec] += 1;
+          perSpell[c.spell] = (perSpell[c.spell] || 0) + 1;
+        }
+      }
+    }
+    const n = Object.values(tot).reduce((x, y) => x + y, 0) || 1;
+    return {
+      quota: Object.fromEntries(Object.entries(tot).map(([k, v]) => [k, v / n])),
+      perSpell,
+    };
+  }
+
+  it('l’aggressore fa più danno diretto del difensore', () => {
+    expect(mixDiLanci('aggressore').quota.damaging)
+      .toBeGreaterThan(mixDiLanci('difensore').quota.damaging);
+  });
+
+  it('il difensore si protegge più dell’aggressore', () => {
+    expect(mixDiLanci('difensore').quota.protection)
+      .toBeGreaterThan(mixDiLanci('aggressore').quota.protection);
+  });
+
+  it('l’evocatore è l’unico che riempie il campo di creature', () => {
+    // misurato ~31% contro 0% di tutti gli altri stili
+    expect(mixDiLanci('evocatore', 10).quota.summons).toBeGreaterThan(0.08);
+    expect(mixDiLanci('completo', 10).quota.summons).toBeLessThan(0.05);
+  });
+
+  it('l’ammaliatore punta sugli enchantment mentali', () => {
+    const m = mixDiLanci('ammaliatore');
+    expect(m.quota.enchantment).toBeGreaterThan(mixDiLanci('aggressore').quota.enchantment);
+    const mentali = ['paralysis', 'charmPerson', 'amnesia', 'confusion', 'fear'];
+    expect(mentali.some((s) => m.perSpell[s])).toBe(true);
+  });
+
+  it('l’avvelenatore avvelena davvero, nonostante siano incantesimi lunghi', () => {
+    // regressione: con un peso troppo basso non lanciava mai poison/disease
+    const m = mixDiLanci('avvelenatore', 14);
+    expect((m.perSpell.poison || 0) + (m.perSpell.disease || 0)).toBeGreaterThan(0);
+  });
+
+  it('PoltroMago non ha bias: gioca uguale a prescindere dallo stile passato', () => {
+    const game = snapshotAfter([[{ left: 'S', right: ' ' }, { left: 'W', right: ' ' }]]);
+    const b = book();
+    const senza = app.chooseAiTurn(game, { level: 5, playerId: 'b', book: b });
+    const con = app.chooseAiTurn(game, { level: 5, style: 'aggressore', playerId: 'b', book: b });
+    expect(con.left).toBe(senza.left);
+    expect(con.right).toBe(senza.right);
   });
 });

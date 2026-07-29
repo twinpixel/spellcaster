@@ -3,13 +3,67 @@
 /* =========================================================================
  * Spellcaster — avversari controllati dal computer.
  *
- * Quattro fasce di abilità, con i maghi raggruppati per «quanto sono forti»
- * nelle rispettive storie (vedi docs/WIZARDS.md per le fonti).
+ * Cinque fasce di abilità, con i maghi raggruppati per «quanto sono forti»
+ * nelle rispettive storie, e una personalità per ciascuno (vedi
+ * docs/WIZARDS.md). In cima PoltroMago: nessuna preferenza, gioco perfetto.
  *
  * Il cervello è uno solo: ricostruisce le sequenze di gesti di entrambi i
  * duellanti dallo storico, valuta tutte le 64 combinazioni di mani possibili
  * e sceglie la migliore. Le fasce basse lo usano peggio, di proposito.
  * ========================================================================= */
+
+/**
+ * Personalità: spostano le *preferenze*, non le decisioni critiche.
+ * I moltiplicatori agiscono sul valore base di un incantesimo; la risposta a
+ * una minaccia reale e il colpo di grazia restano fuori dal bias, così un mago
+ * «difensore» non rinuncia comunque a chiudere la partita.
+ */
+const AI_STYLES = {
+  aggressore: {
+    label: 'Aggressore',
+    hint: 'va dritto al danno',
+    sections: { damaging: 1.5, protection: 0.7, summons: 0.85, enchantment: 0.85 },
+    favourites: { lightningBoltLong: 1.6, fireball: 1.5, causeHeavyWounds: 1.4, fingerOfDeath: 1.4 },
+  },
+  difensore: {
+    label: 'Difensore',
+    hint: 'para, resiste e cura',
+    sections: { damaging: 0.75, protection: 1.55, summons: 0.85, enchantment: 1.05 },
+    favourites: { counterSpell: 1.7, shield: 1.5, protectionFromEvil: 1.6, cureHeavyWounds: 1.5 },
+  },
+  evocatore: {
+    label: 'Evocatore',
+    hint: 'riempie il campo di creature',
+    sections: { damaging: 0.75, protection: 0.85, summons: 2.6, enchantment: 0.7 },
+    favourites: { summonGoblin: 1.5, summonOgre: 1.6, summonTroll: 1.6, summonGiant: 1.5, charmMonster: 1.4 },
+  },
+  ammaliatore: {
+    label: 'Ammaliatore',
+    hint: 'ti toglie il controllo delle mani',
+    sections: { damaging: 0.8, protection: 0.9, summons: 0.85, enchantment: 1.6 },
+    favourites: { charmPerson: 1.8, amnesia: 1.5, confusion: 1.5, paralysis: 1.5, fear: 1.4 },
+  },
+  avvelenatore: {
+    label: 'Avvelenatore',
+    hint: 'ti uccide lentamente',
+    sections: { damaging: 0.85, protection: 0.95, summons: 0.85, enchantment: 1.45 },
+    // poison e disease sono da 6 gesti: senza un peso alto non li sceglierebbe mai
+    favourites: { poison: 3.2, disease: 3.2, blindness: 1.6, antiSpell: 1.2 },
+  },
+  completo: {
+    label: 'Completo',
+    hint: 'nessuna preferenza, sa fare tutto',
+    sections: {},
+    favourites: {},
+  },
+};
+
+/** Peso che una personalità dà a un incantesimo (1 = indifferente). */
+function aiStyleWeight(styleKey, spellId, section) {
+  const style = AI_STYLES[styleKey];
+  if (!style) return 1;
+  return (style.sections?.[section] ?? 1) * (style.favourites?.[spellId] ?? 1);
+}
 
 const AI_TIERS = [
   {
@@ -18,12 +72,12 @@ const AI_TIERS = [
     label: 'Apprendista',
     blurb: 'Gesti confusi, incantesimi lasciati a metà.',
     wizards: [
-      { name: 'Caspar', note: 'Uno dei Re Magi: astronomo, non incantatore' },
-      { name: 'Melchior', note: 'Legge le stelle, non le piega' },
-      { name: 'Balthazar', note: 'Porta doni, non maledizioni' },
-      { name: 'Alatar', note: 'Stregone Blu: sparito a est senza gloria' },
-      { name: 'Pallando', note: 'L’altro Blu: missione fallita' },
-      { name: 'Radagast', note: 'Il più debole degli Istari, parla con le bestie' },
+      { name: 'Caspar', style: 'completo', note: 'Uno dei Re Magi: astronomo, non incantatore' },
+      { name: 'Melchior', style: 'completo', note: 'Legge le stelle, non le piega' },
+      { name: 'Balthazar', style: 'completo', note: 'Porta doni, non maledizioni' },
+      { name: 'Alatar', style: 'evocatore', note: 'Stregone Blu: sparito a est senza gloria' },
+      { name: 'Pallando', style: 'evocatore', note: 'L’altro Blu: missione fallita' },
+      { name: 'Radagast', style: 'evocatore', note: 'Il più debole degli Istari, parla con le bestie' },
     ],
   },
   {
@@ -32,12 +86,12 @@ const AI_TIERS = [
     label: 'Adepto',
     blurb: 'Completa gli incantesimi semplici e si difende.',
     wizards: [
-      { name: 'Rasputin', note: 'Fama di mistico più che poteri provati' },
-      { name: 'Glinda', note: 'Strega Buona del Sud: potente ma gentile' },
-      { name: 'Oberon', note: 'Re delle fate: magia di natura, non di studio' },
-      { name: 'Titania', note: 'Regina delle fate, incantesimi di illusione' },
-      { name: 'Viviana', note: 'Dama del Lago, allieva di Merlino' },
-      { name: 'Nimue', note: 'L’altra Dama del Lago: astuta più che potente' },
+      { name: 'Rasputin', style: 'avvelenatore', note: 'Fama di mistico più che poteri provati' },
+      { name: 'Glinda', style: 'difensore', note: 'Strega Buona del Sud: potente ma gentile' },
+      { name: 'Oberon', style: 'ammaliatore', note: 'Re delle fate: magia di natura, non di studio' },
+      { name: 'Titania', style: 'ammaliatore', note: 'Regina delle fate, incantesimi di illusione' },
+      { name: 'Viviana', style: 'difensore', note: 'Dama del Lago, allieva di Merlino' },
+      { name: 'Nimue', style: 'ammaliatore', note: 'L’altra Dama del Lago: astuta più che potente' },
     ],
   },
   {
@@ -46,14 +100,14 @@ const AI_TIERS = [
     label: 'Maestro',
     blurb: 'Legge i tuoi gesti e para le minacce.',
     wizards: [
-      { name: 'Morgana', note: 'Grande Regina e Maga, signora di Avalon' },
-      { name: 'Medea', note: 'Nipote di Circe, maestra di veleni' },
-      { name: 'Prospero', note: 'Comanda tempeste e spiriti — poi spezza la bacchetta' },
-      { name: 'Saruman', note: 'Il più potente degli Istari finché Gandalf non tornò' },
-      { name: 'Mordenkainen', note: 'Il più forte mago mortale del Piano Materiale' },
-      { name: 'Zatanna', note: 'Magia al contrario, livello Justice League' },
-      { name: 'Tasha', note: 'Iggwilv, arcimaga leggendaria di D&D' },
-      { name: 'Fistandantilus', note: 'Arcimago oscuro — poi Raistlin lo assorbì' },
+      { name: 'Morgana', style: 'ammaliatore', note: 'Grande Regina e Maga, signora di Avalon' },
+      { name: 'Medea', style: 'avvelenatore', note: 'Nipote di Circe, maestra di veleni' },
+      { name: 'Prospero', style: 'aggressore', note: 'Comanda tempeste e spiriti — poi spezza la bacchetta' },
+      { name: 'Saruman', style: 'evocatore', note: 'Il più potente degli Istari finché Gandalf non tornò' },
+      { name: 'Mordenkainen', style: 'completo', note: 'Il più forte mago mortale del Piano Materiale' },
+      { name: 'Zatanna', style: 'ammaliatore', note: 'Magia al contrario, livello Justice League' },
+      { name: 'Tasha', style: 'evocatore', note: 'Iggwilv, arcimaga leggendaria di D&D' },
+      { name: 'Fistandantilus', style: 'avvelenatore', note: 'Arcimago oscuro — poi Raistlin lo assorbì' },
     ],
   },
   {
@@ -62,11 +116,20 @@ const AI_TIERS = [
     label: 'Arcimago',
     blurb: 'Gioco quasi perfetto. Non sbaglia un gesto.',
     wizards: [
-      { name: 'Merlino', note: 'Il mago per definizione' },
-      { name: 'Gandalf', note: 'Un Maia: non un mortale che lancia incantesimi' },
-      { name: 'Circe', note: 'La più potente delle maghe, dea della magia' },
-      { name: 'Elminster', note: 'Prescelto di Mystra, oltre Mordenkainen' },
-      { name: 'Raistlin', note: 'Salì fino a minacciare gli dèi' },
+      { name: 'Merlino', style: 'completo', note: 'Il mago per definizione' },
+      { name: 'Gandalf', style: 'difensore', note: 'Un Maia: non un mortale che lancia incantesimi' },
+      { name: 'Circe', style: 'ammaliatore', note: 'La più potente delle maghe, dea della magia' },
+      { name: 'Elminster', style: 'aggressore', note: 'Prescelto di Mystra, oltre Mordenkainen' },
+      { name: 'Raistlin', style: 'aggressore', note: 'Salì fino a minacciare gli dèi' },
+    ],
+  },
+  {
+    level: 5,
+    key: 'poltromago',
+    label: 'PoltroMago',
+    blurb: 'Gioco perfetto. Nessuna preferenza, nessun errore, nessuna pietà.',
+    wizards: [
+      { name: 'PoltroMago', style: null, note: 'L’autore in persona: gioca la mossa migliore e basta' },
     ],
   },
 ];
@@ -219,6 +282,10 @@ const AI_POOL_BY_LEVEL = {
 function aiSpellValue(id, ctx) {
   let v = AI_SPELL_VALUE[id] ?? 8;
 
+  // Personalità: sposta le preferenze. Si applica qui, cioè PRIMA dei bonus
+  // difensivi e del colpo di grazia più sotto, che restano fuori dal bias.
+  if (ctx.styleWeight) v *= ctx.styleWeight(id);
+
   // Curarsi conta solo se si è feriti
   if (id === 'cureLightWounds' || id === 'cureHeavyWounds' || id === 'raiseDead') {
     v *= Math.min(2.2, 0.25 + ctx.myDamage / 5);
@@ -228,6 +295,8 @@ function aiSpellValue(id, ctx) {
   if (id === 'iceStorm') v *= ctx.myResistCold ? 2 : (ctx.oppDamage > ctx.myDamage + 4 ? 0.9 : 0.25);
   // L'elementale attacca chiunque, controllore compreso
   if (id === 'summonElemental') v *= (ctx.myResistHeat || ctx.myResistCold) ? 1.8 : 0.6;
+  // Ammaliare un mostro che non esiste è un incantesimo sprecato
+  if (id === 'charmMonster' && !ctx.hasFoeMonster) v = 0;
   // Lo scudo vale in proporzione a ciò che sta arrivando
   if (id === 'shield') v += ctx.physicalThreat * 14;
   if (id === 'protectionFromEvil') v += ctx.physicalThreat * 10;
@@ -259,7 +328,7 @@ function aiProgressValue(buffer, book, ctx, pool) {
     for (const pattern of spell.patterns) {
       // aiRemaining vale già «quanti gesti mancano»: 0 se completo,
       // pattern.length se la sequenza va ricominciata da capo.
-      const score = base * Math.pow(AI_PROGRESS_DECAY, aiRemaining(buffer, pattern));
+      const score = base * Math.pow(ctx.decay || AI_PROGRESS_DECAY, aiRemaining(buffer, pattern));
       if (score > best) best = score;
     }
   }
@@ -296,7 +365,7 @@ function aiIncomingThreats(oppBuffers, book) {
  * @returns {object} payload per POST /games/:id/turn
  */
 function chooseAiTurn(game, opts = {}) {
-  const level = Math.min(4, Math.max(1, opts.level || 1));
+  const level = Math.min(5, Math.max(1, opts.level || 1));
   const me = opts.playerId || 'b';
   const foe = me === 'a' ? 'b' : 'a';
   const book = opts.book || [];
@@ -315,12 +384,23 @@ function chooseAiTurn(game, opts = {}) {
   }
 
   const threats = level >= 3 ? aiIncomingThreats(oppBuf, book) : [];
+  const worstThreat = threats.reduce((n, t) => Math.max(n, AI_THREAT_DAMAGE[t] || 0), 0);
   const physicalThreat =
     (level >= 3 ? foeMonsters.length : 0) +
     threats.filter((t) => AI_SHIELDABLE.has(t)).length;
-  const spellThreat = threats.reduce((n, t) => Math.max(n, AI_THREAT_DAMAGE[t] || 0), 0);
+  const spellThreat = worstThreat;
+
+  // PoltroMago non ha preferenze: valuta e basta.
+  const styleKey = level >= 5 ? null : (opts.style || null);
+  const sectionOf = new Map(book.map((sp) => [sp.id, sp.section]));
 
   const ctx = {
+    styleWeight: styleKey
+      ? (id) => aiStyleWeight(styleKey, id, sectionOf.get(id))
+      : null,
+    // Il gioco perfetto guarda più lontano: sconta meno i piani lunghi
+    decay: level >= 5 ? 0.8 : AI_PROGRESS_DECAY,
+    hasFoeMonster: foeMonsters.length > 0,
     myDamage: mine.damage || 0,
     oppDamage: theirs.damage || 0,
     oppHp: Math.max(1, 14 - (theirs.damage || 0)),
@@ -346,7 +426,7 @@ function chooseAiTurn(game, opts = {}) {
   if (!best) return aiSloppyTurn(foe, myMonsters);
 
   // Rumore: le fasce basse sbagliano di proposito
-  const noise = { 1: 0.35, 2: 0.25, 3: 0.1, 4: 0 }[level];
+  const noise = { 1: 0.35, 2: 0.25, 3: 0.1, 4: 0, 5: 0 }[level];
   if (noise && Math.random() < noise) {
     return aiSloppyTurn(foe, myMonsters);
   }
