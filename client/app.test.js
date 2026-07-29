@@ -431,6 +431,44 @@ describe('rendering', () => {
     expect(document.querySelectorAll('.history-row')).toHaveLength(2);
   });
 
+  it('separa console e storico così che possano stare affiancati', () => {
+    // Il posizionamento è CSS (@media min-width 700px), ma dipende da questa
+    // struttura: se sparisce, sugli schermi orizzontali lo storico torna in fondo.
+    app.state.game = snapshotAfter([[{ left: 'S', right: ' ' }, {}]]);
+    app.state.playerId = 'a';
+    app.state.view = 'duel';
+    app.render();
+
+    const layout = document.querySelector('.duel-layout');
+    expect(layout).toBeTruthy();
+    expect(layout.querySelector(':scope > .duel-console')).toBeTruthy();
+    expect(layout.querySelector(':scope > .duel-side')).toBeTruthy();
+
+    // lo storico sta nella colonna laterale, i comandi in quella principale
+    expect(document.querySelector('.duel-side .history')).toBeTruthy();
+    expect(document.querySelector('.duel-console .history')).toBe(null);
+    for (const sel of ['.score', '.hands-row', '.actions', '.status-slot']) {
+      expect(document.querySelector(`.duel-console ${sel}`)).toBeTruthy();
+    }
+  });
+
+  it('le intestazioni dello storico restano corte e con legenda', () => {
+    // regressione: «Player A SX» debordava sovrapponendosi alle colonne vicine
+    app.state.game = snapshotAfter([[{ left: 'S', right: ' ' }, {}]]);
+    app.state.playerId = 'a';
+    app.state.view = 'duel';
+    app.render();
+
+    const head = [...document.querySelectorAll('.history-head .history-cell')]
+      .map((e) => e.textContent.trim());
+    expect(head).toEqual(['SX', 'DX', 'SX', 'DX']);
+
+    const legend = [...document.querySelectorAll('.history-legend .hl')]
+      .map((e) => e.textContent.trim());
+    expect(legend).toEqual(['Alpha', 'Beta']);
+    expect(document.querySelector('.history-legend .hl').classList.contains('me')).toBe(true);
+  });
+
   it('l’anteprima «resa» compare solo sulla coppia di mani interessata', () => {
     app.state.game = snapshotAfter();
     app.state.playerId = 'a';

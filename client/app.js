@@ -1344,12 +1344,16 @@ function renderHistory() {
   return `
     <section class="history">
       <div class="history-title">Storico turni${blind ? ' · cecità' : ''}</div>
+      <div class="history-legend">
+        <span class="hl me">${escapeHtml(meShort)}</span>
+        <span class="hl">${escapeHtml(oppShort)}</span>
+      </div>
       <div class="history-head" style="grid-template-columns:${colTemplate}">
         <div class="history-turn">#</div>
-        <div class="history-cell me" title="${escapeHtml(playerName(me, g))} sinistra">${escapeHtml(meShort)} SX</div>
-        <div class="history-cell me" title="${escapeHtml(playerName(me, g))} destra">${escapeHtml(meShort)} DX</div>
-        <div class="history-cell" title="${escapeHtml(playerName(other, g))} sinistra">${escapeHtml(oppShort)} SX</div>
-        <div class="history-cell" title="${escapeHtml(playerName(other, g))} destra">${escapeHtml(oppShort)} DX</div>
+        <div class="history-cell me" title="${escapeHtml(playerName(me, g))} · mano sinistra">SX</div>
+        <div class="history-cell me" title="${escapeHtml(playerName(me, g))} · mano destra">DX</div>
+        <div class="history-cell" title="${escapeHtml(playerName(other, g))} · mano sinistra">SX</div>
+        <div class="history-cell" title="${escapeHtml(playerName(other, g))} · mano destra">DX</div>
         ${headMonsters}
         <div class="history-cast-cell me" title="Incantesimi di ${escapeHtml(playerName(me, g))}">${escapeHtml(meShort)} ✦</div>
         <div class="history-cast-cell" title="Incantesimi di ${escapeHtml(playerName(other, g))}">${escapeHtml(oppShort)} ✦</div>
@@ -1673,48 +1677,53 @@ function renderDuel() {
     ? 'Seleziona tutte le mani richieste prima di inviare.'
     : (state.error ? state.error : '');
 
+  // Su schermi larghi console e storico stanno affiancati (vedi .duel-layout)
   app.innerHTML = `
     ${finished}
     ${renderInviteBox()}
-    <div class="score">
-      <div class="score-card you">
-        <div class="name">${escapeHtml(me.name)}</div>
-        <div class="hp" title="Punti vita">${wizardHp(me.damage)}</div>
-        ${statusBadges(me.status, { mine: true })}
-      </div>
-      <div class="score-card">
-        <div class="name">${escapeHtml(opp.name)}</div>
-        <div class="hp" title="Punti vita">${wizardHp(opp.damage)}</div>
-        ${statusBadges(opp.status)}
-      </div>
-    </div>
-    <div class="monsters-slot">${renderMonstersScore() || ''}</div>
-    <p class="meta">Turno ${g.turn}${g.extraTurnFor ? ' · time stop' : ''}</p>
-    <div class="status-slot">${status}</div>
-    ${renderEffectHints()}
-    ${g.finished ? '' : `
-      <p class="hint">Scegli i gesti, poi Fine turno</p>
-      <div class="hands-row">
-        ${renderHand('Mano sinistra', 'left')}
-        ${renderHand('Mano destra', 'right')}
-      </div>
-      <div class="haste-slot ${haste ? 'active' : ''}">
-        ${haste ? `
-          <p class="hint haste-hint">Seconda coppia (Haste)</p>
-          <div class="hands-row haste-row">
-            ${renderHand('Haste SX', 'left2')}
-            ${renderHand('Haste DX', 'right2')}
+    <div class="duel-layout">
+      <div class="duel-console">
+        <div class="score">
+          <div class="score-card you">
+            <div class="name">${escapeHtml(me.name)}</div>
+            <div class="hp" title="Punti vita">${wizardHp(me.damage)}</div>
+            ${statusBadges(me.status, { mine: true })}
           </div>
-        ` : ''}
+          <div class="score-card">
+            <div class="name">${escapeHtml(opp.name)}</div>
+            <div class="hp" title="Punti vita">${wizardHp(opp.damage)}</div>
+            ${statusBadges(opp.status)}
+          </div>
+        </div>
+        <div class="monsters-slot">${renderMonstersScore() || ''}</div>
+        <p class="meta">Turno ${g.turn}${g.extraTurnFor ? ' · time stop' : ''}</p>
+        <div class="status-slot">${status}</div>
+        ${renderEffectHints()}
+        ${g.finished ? '' : `
+          <p class="hint">Scegli i gesti, poi Fine turno</p>
+          <div class="hands-row">
+            ${renderHand('Mano sinistra', 'left')}
+            ${renderHand('Mano destra', 'right')}
+          </div>
+          <div class="haste-slot ${haste ? 'active' : ''}">
+            ${haste ? `
+              <p class="hint haste-hint">Seconda coppia (Haste)</p>
+              <div class="hands-row haste-row">
+                ${renderHand('Haste SX', 'left2')}
+                ${renderHand('Haste DX', 'right2')}
+              </div>
+            ` : ''}
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" id="btn-end" ${canSubmit ? '' : 'disabled'}>
+              ${state.loading ? 'Invio…' : state.waitingSubmit ? 'In attesa…' : 'Fine turno'}
+            </button>
+            <p class="action-note ${state.error ? 'error' : ''}">${actionNote ? escapeHtml(actionNote) : '&nbsp;'}</p>
+          </div>
+        `}
       </div>
-      <div class="actions">
-        <button class="btn btn-primary" id="btn-end" ${canSubmit ? '' : 'disabled'}>
-          ${state.loading ? 'Invio…' : state.waitingSubmit ? 'In attesa…' : 'Fine turno'}
-        </button>
-        <p class="action-note ${state.error ? 'error' : ''}">${actionNote ? escapeHtml(actionNote) : '&nbsp;'}</p>
-      </div>
-    `}
-    ${renderHistory()}
+      <div class="duel-side">${renderHistory()}</div>
+    </div>
   `;
 
   app.querySelectorAll('.gesture').forEach((btn) => {

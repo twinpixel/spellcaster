@@ -614,6 +614,11 @@ html, body {
   border-color: rgba(232, 195, 106, 0.45);
 }
 
+/* Colonna singola: console sopra, storico sotto (default mobile in verticale) */
+.duel-layout {
+  display: block;
+}
+
 .history {
   background: var(--card);
   border: 1px solid var(--line);
@@ -622,6 +627,46 @@ html, body {
   margin-top: 20px;
   margin-bottom: 8px;
   box-shadow: var(--shadow);
+}
+
+/*
+ * Schermi orizzontali / larghi: lo storico va accanto alla console (stato dei
+ * giocatori + mosse) invece che in fondo, così resta visibile mentre si gioca.
+ * La soglia copre i telefoni in landscape (≥ 700px di larghezza) e tutto ciò
+ * che è più largo.
+ */
+@media (min-width: 700px) {
+  .app {
+    max-width: 1080px;
+  }
+
+  .duel-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.85fr);
+    gap: 20px;
+    align-items: start;
+  }
+
+  .duel-side .history {
+    margin-top: 0;
+    position: sticky;
+    top: calc(var(--appbar-h) + env(safe-area-inset-top) + 12px);
+  }
+
+  .duel-side .history-scroll {
+    /* Sfrutta l’altezza disponibile invece dei 220px fissi del mobile */
+    max-height: min(58vh, 460px);
+  }
+}
+
+/* Landscape basso (telefoni ruotati): recupera spazio verticale */
+@media (min-width: 700px) and (max-height: 520px) {
+  .app {
+    padding-top: 12px;
+  }
+  .duel-side .history-scroll {
+    max-height: 52vh;
+  }
 }
 
 .history-title {
@@ -653,6 +698,46 @@ html, body {
   padding-bottom: 6px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 4px;
+}
+
+/* Le intestazioni non devono mai debordare l’una sull’altra */
+.history-head .history-cell,
+.history-head .history-cast-cell {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.history-legend {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+}
+
+.history-legend .hl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.history-legend .hl::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--muted);
+}
+
+.history-legend .hl.me {
+  color: var(--accent);
+}
+
+.history-legend .hl.me::before {
+  background: var(--accent);
 }
 
 .history-scroll {
