@@ -8,6 +8,7 @@
     "build:worker": "node server/build.js",
     "icons:generate": "node scripts/generate-icons.mjs",
     "gestures:optimize": "node scripts/optimize-gestures.mjs",
+    "video:todo": "node scripts/video-todo.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage.enabled --coverage.include='server/shared.js' --coverage.include='server/status.js'",
