@@ -9,10 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createGameService } from '../server/shared.js';
+import { createGameService, spellListJson, SPELL_PATTERNS } from '../server/shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SRC = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf-8');
+// ai.js è caricato prima di app.js anche in index.html: qui li concateniamo
+const AI_SRC = fs.readFileSync(path.join(__dirname, 'ai.js'), 'utf-8');
+const APP_SRC = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf-8');
+const SRC = `${AI_SRC}\n${APP_SRC}`;
 
 const EXPORTS = [
   'state',
@@ -27,7 +30,6 @@ const EXPORTS = [
   'buildTurnPayload',
   'targetOptions',
   'attackTargetOptions',
-  'aiPickTurn',
   'spellVideoSlug',
   'castsVideoKey',
   'wizardHp',
@@ -48,6 +50,17 @@ const EXPORTS = [
   'getNickname',
   'showInfoModal',
   'statusBadges',
+  'AI_TIERS',
+  'AI_WIZARDS',
+  'aiWizardByName',
+  'aiTierByLevel',
+  'aiRandomWizard',
+  'buildSpellBook',
+  'parseSpellGestures',
+  'aiHandBuffers',
+  'aiRemaining',
+  'aiIncomingThreats',
+  'chooseAiTurn',
   'AUTHOR_NAME',
   'AUTHOR_URL',
   'AUTHOR_URL_LABEL',
@@ -625,37 +638,250 @@ describe('polling', () => {
 
 // --- IA --------------------------------------------------------------------
 
-describe('IA solitaria', () => {
-  it('produce sempre gesti accettati dal server', () => {
-    const codes = new Set(app.HAND_OPTIONS.map((o) => o.code));
-    const game = snapshotAfter();
-    for (let i = 0; i < 300; i++) {
-      app.state.aiPlan = null;
-      const turn = app.aiPickTurn(game);
-      expect(codes.has(turn.left)).toBe(true);
-      expect(codes.has(turn.right)).toBe(true);
-      if (turn.stabTarget) expect(turn.stabTarget).toBe('a');
+describe('roster dei maghi', () => {
+  it('quattro fasce, ogni mago in una sola, tutti con nota', () => {
+    expect(app.AI_TIERS.map((t) => t.level)).toEqual([1, 2, 3, 4]);
+    const nomi = app.AI_WIZARDS.map((w) => w.name);
+    expect(new Set(nomi).size).toBe(nomi.length); // nessun nome ripetuto
+    // e nemmeno lo stesso personaggio sotto due nomi («Radagast il Bruno»)
+    const radice = nomi.map((n) => n.split(/\s+(il|la|the|of)\s+/i)[0].toLowerCase());
+    expect(new Set(radice).size).toBe(radice.length);
+    for (const w of app.AI_WIZARDS) {
+      expect(w.note.length).toBeGreaterThan(5);
+      expect([1, 2, 3, 4]).toContain(w.level);
+    }
+    expect(app.AI_WIZARDS.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('ogni fascia ha almeno quattro maghi', () => {
+    for (const t of app.AI_TIERS) expect(t.wizards.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('i pezzi grossi stanno in cima e i comprimari in fondo', () => {
+    const lvl = (n) => app.aiWizardByName(n).level;
+    // Gandalf tornò più forte di Saruman; Raistlin assorbì Fistandantilus;
+    // Circe è la maga per antonomasia, Medea è sua nipote; Elminster > Mordenkainen.
+    expect(lvl('Gandalf')).toBeGreaterThan(lvl('Saruman'));
+    expect(lvl('Saruman')).toBeGreaterThan(lvl('Radagast'));
+    expect(lvl('Raistlin')).toBeGreaterThan(lvl('Fistandantilus'));
+    expect(lvl('Circe')).toBeGreaterThan(lvl('Medea'));
+    expect(lvl('Elminster')).toBeGreaterThan(lvl('Mordenkainen'));
+    expect(lvl('Merlino')).toBe(4);
+    expect(lvl('Alatar')).toBe(1);
+    expect(lvl('Pallando')).toBe(1);
+  });
+
+  it('aiRandomWizard rispetta la fascia richiesta', () => {
+    for (let lv = 1; lv <= 4; lv++) {
+      for (let i = 0; i < 20; i++) expect(app.aiRandomWizard(lv).level).toBe(lv);
     }
   });
 
-  it('ordina alle proprie creature di attaccare l’umano', () => {
-    const game = snapshotAfter();
-    game.monsters = [{ id: 'm1', alive: true, controllerId: 'b', label: 'Goblin' }];
-    app.state.aiPlan = { queue: [['S', ' ']], spell: 'missile', self: false };
-    const turn = app.aiPickTurn(game);
-    expect(turn.monsterOrders).toEqual([{ monsterId: 'm1', targetId: 'a' }]);
+  it('aiTierByLevel e aiWizardByName sono coerenti', () => {
+    expect(app.aiTierByLevel(4).key).toBe('arcimago');
+    expect(app.aiWizardByName('non esiste')).toBe(null);
+    expect(app.aiWizardByName('Circe').tier).toBe(app.aiTierByLevel(4).label);
+  });
+});
+
+describe('cervello IA · lettura del gioco', () => {
+  it('i pattern ricavati da /spells coincidono con quelli del motore', () => {
+    const book = app.buildSpellBook(spellListJson());
+    expect(book.length).toBe(Object.keys(SPELL_PATTERNS).length);
+    for (const spell of book) {
+      expect(spell.patterns).toEqual(SPELL_PATTERNS[spell.id]);
+    }
   });
 
-  it('i turni dell’IA sono giocabili dal motore vero', () => {
+  it('parseSpellGestures capisce clap e gesti a due mani', () => {
+    expect(app.parseSpellGestures('S-D')).toEqual([[
+      { t: 'single', g: 'S' }, { t: 'single', g: 'D' },
+    ]]);
+    expect(app.parseSpellGestures('C-(w')).toEqual([[
+      { t: 'clap' }, { t: 'both', g: 'W' },
+    ]]);
+    expect(app.parseSpellGestures('W-P-P / W-W-S')).toHaveLength(2);
+  });
+
+  it('ricostruisce dalle mosse le stesse sequenze che ha il server', () => {
+    const svc = createGameService();
+    const { id } = svc.createGame({ nameA: 'Alpha', nameB: 'Beta' });
+    svc.joinGame(id, 'b', 'Beta');
+    const mosse = [
+      [{ left: 'S', right: 'W' }, { left: 'P', right: ' ' }],
+      [{ left: 'F', right: 'W' }, { left: 'D', right: 'stab' }],
+      [{ left: 'W', right: 'W' }, { left: 'C', right: 'C' }],
+      [{ left: 'D', right: ' ' }, { left: 'W', right: 'W' }],
+    ];
+    let snap;
+    for (const [a, b] of mosse) {
+      svc.submitTurn(id, { playerId: 'a', ...a });
+      snap = svc.submitTurn(id, { playerId: 'b', ...b });
+    }
+    const room = svc._games.get(id);
+    for (const pid of ['a', 'b']) {
+      const wizard = pid === 'a' ? room.state.wizardA : room.state.wizardB;
+      const letto = app.aiHandBuffers(snap, pid);
+      expect(letto.left).toEqual(wizard.leftHand.symbols);
+      expect(letto.right).toEqual(wizard.rightHand.symbols);
+    }
+  });
+
+  it('aiRemaining conta i gesti che mancano', () => {
+    const missile = SPELL_PATTERNS.missile[0];
+    expect(app.aiRemaining([], missile)).toBe(2);
+    expect(app.aiRemaining([{ t: 'single', g: 'S' }], missile)).toBe(1);
+    expect(app.aiRemaining([{ t: 'single', g: 'S' }, { t: 'single', g: 'D' }], missile)).toBe(0);
+    // un gesto a due mani vale come singolo
+    expect(app.aiRemaining([{ t: 'both', g: 'S' }], missile)).toBe(1);
+    // sequenza sbagliata: si riparte da capo
+    expect(app.aiRemaining([{ t: 'single', g: 'P' }], missile)).toBe(2);
+  });
+
+  it('vede le minacce a un gesto dal completamento', () => {
+    const book = app.buildSpellBook(spellListJson());
+    const buffers = { left: [{ t: 'single', g: 'S' }], right: [] };
+    expect(app.aiIncomingThreats(buffers, book)).toContain('missile');
+
+    const lampo = {
+      left: [{ t: 'single', g: 'D' }, { t: 'single', g: 'F' },
+        { t: 'single', g: 'F' }, { t: 'single', g: 'D' }],
+      right: [],
+    };
+    expect(app.aiIncomingThreats(lampo, book)).toContain('lightningBoltLong');
+    expect(app.aiIncomingThreats({ left: [], right: [] }, book)).not.toContain('missile');
+  });
+});
+
+describe('cervello IA · scelte', () => {
+  const book = () => app.buildSpellBook(spellListJson());
+
+  function partita() {
     const svc = createGameService();
     const snap = svc.createGame({ nameA: 'Umano', nameB: 'Bot' });
     svc.joinGame(snap.id, 'b', 'Bot');
-    let game = snap;
-    for (let i = 0; i < 40 && !game.finished; i++) {
-      svc.submitTurn(snap.id, { playerId: 'a', left: ' ', right: ' ' });
-      const turn = app.aiPickTurn(game);
-      game = svc.submitTurn(snap.id, { playerId: 'b', ...turn });
+    return { svc, id: snap.id, snap };
+  }
+
+  it('non si arrende mai per sbaglio, a nessuna fascia', () => {
+    const { snap } = partita();
+    for (let lv = 1; lv <= 4; lv++) {
+      for (let i = 0; i < 150; i++) {
+        const t = app.chooseAiTurn(snap, { level: lv, playerId: 'b', book: book() });
+        expect(t.left === 'P' && t.right === 'P').toBe(false);
+        expect(t.left === 'stab' && t.right === 'stab').toBe(false);
+      }
     }
-    expect(game.turn).toBeGreaterThan(0);
+  });
+
+  it('produce sempre gesti che il server accetta', () => {
+    const codes = new Set(app.HAND_OPTIONS.map((o) => o.code));
+    const { snap } = partita();
+    for (let lv = 1; lv <= 4; lv++) {
+      for (let i = 0; i < 60; i++) {
+        const t = app.chooseAiTurn(snap, { level: lv, playerId: 'b', book: book() });
+        expect(codes.has(t.left)).toBe(true);
+        expect(codes.has(t.right)).toBe(true);
+      }
+    }
+  });
+
+  it('l’arcimago chiude un missile che ha già impostato', () => {
+    const { svc, id } = partita();
+    svc.submitTurn(id, { playerId: 'a', left: ' ', right: ' ' });
+    const snap = svc.submitTurn(id, { playerId: 'b', left: 'S', right: ' ' });
+    const t = app.chooseAiTurn(snap, { level: 4, playerId: 'b', book: book() });
+    expect(t.left).toBe('D'); // S-D = missile
+    expect(t.leftSpell).toBe('missile');
+  });
+
+  it('l’arcimago dà ordini alle proprie creature', () => {
+    const { snap } = partita();
+    const game = { ...snap, monsters: [{ id: 'm1', alive: true, controllerId: 'b', label: 'Goblin', hp: 1, attack: 1 }] };
+    const t = app.chooseAiTurn(game, { level: 4, playerId: 'b', book: book() });
+    expect(t.monsterOrders).toEqual([{ monsterId: 'm1', targetId: 'a' }]);
+  });
+
+  it('i turni dell’IA sono giocabili dal motore vero, a ogni fascia', () => {
+    for (let lv = 1; lv <= 4; lv++) {
+      const { svc, id } = partita();
+      let game = svc.getGame(id);
+      for (let i = 0; i < 30 && !game.finished; i++) {
+        svc.submitTurn(id, { playerId: 'a', left: ' ', right: ' ' });
+        const t = app.chooseAiTurn(game, { level: lv, playerId: 'b', book: book() });
+        game = svc.submitTurn(id, { playerId: 'b', ...t });
+      }
+      expect(game.turn).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('cervello IA · le fasce alte giocano meglio', () => {
+  const book = () => app.buildSpellBook(spellListJson());
+
+  /** Duello IA contro IA fino alla fine o al limite di turni. */
+  function duello(levelA, levelB, maxTurni = 60) {
+    const svc = createGameService();
+    const snap = svc.createGame({ nameA: 'A', nameB: 'B' });
+    svc.joinGame(snap.id, 'b', 'B');
+    let game = svc.getGame(snap.id);
+    const b = book();
+    for (let i = 0; i < maxTurni && !game.finished; i++) {
+      const ta = app.chooseAiTurn(game, { level: levelA, playerId: 'a', book: b });
+      const tb = app.chooseAiTurn(game, { level: levelB, playerId: 'b', book: b });
+      try {
+        svc.submitTurn(snap.id, { playerId: 'a', ...ta });
+        game = svc.submitTurn(snap.id, { playerId: 'b', ...tb });
+      } catch {
+        break; // partita chiusa a metà turno
+      }
+    }
+    return game;
+  }
+
+  it('la scala delle fasce è monotòna: ognuna batte quella sotto', () => {
+    const percentuale = (a, b, n = 10) => {
+      let win = 0;
+      for (let i = 0; i < n; i++) if (duello(a, b, 40).winnerId === 'a') win += 1;
+      return win / n;
+    };
+    expect(percentuale(2, 1)).toBeGreaterThan(0.6);
+    expect(percentuale(3, 2)).toBeGreaterThan(0.55);
+    expect(percentuale(4, 3)).toBeGreaterThan(0.4);
+    expect(percentuale(4, 1)).toBeGreaterThan(0.8);
+  });
+
+  it('l’arcimago stravince contro l’apprendista', () => {
+    let vittorie = 0;
+    let danniInflitti = 0;
+    let danniSubiti = 0;
+    const n = 12;
+    for (let i = 0; i < n; i++) {
+      const g = duello(1, 4);
+      if (g.winnerId === 'b') vittorie += 1;
+      danniInflitti += g.players.a.damage;
+      danniSubiti += g.players.b.damage;
+    }
+    // Non pretendiamo il 100% (resa e caso esistono), ma il divario dev'essere netto
+    expect(danniInflitti).toBeGreaterThan(danniSubiti * 2);
+    expect(vittorie).toBeGreaterThanOrEqual(n / 2);
+  });
+
+  it('l’arcimago non perde mai la partita contro sé stesso per errori banali', () => {
+    const g = duello(4, 4);
+    // Nessuno dei due deve arrendersi: se finisce, è per danni
+    if (g.finished && !g.isDraw) {
+      const perdente = g.winnerId === 'a' ? 'b' : 'a';
+      expect(g.players[perdente].damage).toBeGreaterThan(14);
+    }
+  });
+
+  it('salendo di fascia si fa più male all’avversario', () => {
+    const danno = (lv) => {
+      let tot = 0;
+      for (let i = 0; i < 8; i++) tot += duello(lv, 1, 25).players.b.damage;
+      return tot;
+    };
+    expect(danno(4)).toBeGreaterThan(danno(1));
   });
 });

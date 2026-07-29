@@ -19,38 +19,6 @@ GESTURE_BY_LABEL['†'] = HAND_OPTIONS.find((o) => o.code === 'stab');
 GESTURE_BY_LABEL['C'] = HAND_OPTIONS.find((o) => o.code === 'C');
 GESTURE_BY_LABEL['—'] = HAND_OPTIONS.find((o) => o.code === ' ');
 
-const AI_WIZARD_NAMES = [
-  'Merlin',
-  'Morgana',
-  'Gandalf',
-  'Prospero',
-  'Circe',
-  'Medea',
-  'Rasputin',
-  'Alatar',
-  'Pallando',
-  'Viviana',
-  'Nimue',
-  'Zatanna',
-  'Elminster',
-  'Tasha',
-  'Mordenkainen',
-  'Raistlin',
-  'Fistandantilus',
-  'Saruman',
-  'Radagast',
-  'Balthazar',
-  'Melchior',
-  'Caspar',
-  'Oberon',
-  'Titania',
-  'Glinda',
-];
-
-function randomAiName() {
-  return AI_WIZARD_NAMES[Math.floor(Math.random() * AI_WIZARD_NAMES.length)];
-}
-
 const SESSION_KEY = 'spellcaster.session';
 const NICK_KEY = 'spellcaster.nickname';
 const SPELL_VIDEO_KEY = 'spellcaster.spellVideos';
@@ -115,6 +83,11 @@ const state = {
   error: null,
   spells: null,
   solo: false,
+  /** Mago controllato dal computer: nome e fascia di abilità (1–4). */
+  aiWizard: null,
+  aiLevel: 1,
+  /** Catalogo incantesimi in forma di pattern, per il cervello dell’IA. */
+  aiBook: null,
   waitingSubmit: false,
   pendingJoinId: null,
   /** @type {Record<string, string>} monsterId -> targetId */
@@ -129,8 +102,6 @@ const state = {
   paralysisHand: 'left',
   charmForced: 'P',
   releaseDelayed: false,
-  /** @type {{ queue: string[][], spell: string|null, self: boolean }|null} */
-  aiPlan: null,
   spellVideos: loadSpellVideosPref(),
   /** Chiave ultimo turno già mostrato come clip (evita replay al poll). */
   lastSpellVideoKey: null,
@@ -353,6 +324,8 @@ function saveSession() {
     gameId: state.game.id,
     playerId: state.playerId,
     solo: state.solo,
+    aiWizard: state.aiWizard,
+    aiLevel: state.aiLevel,
   }));
 }
 
@@ -500,39 +473,43 @@ async function refreshGame() {
   }
 }
 
-async function createGame({ solo = false } = {}) {
+async function createGame({ solo = false, wizard = null } = {}) {
   const nick = requireNickname();
   if (!nick) return;
+  const foe = solo ? (wizard || aiRandomWizard()) : null;
   state.loading = true;
   state.error = null;
-  state.aiPlan = null;
   render();
   try {
     let game = await api('/games', {
       method: 'POST',
       body: JSON.stringify({
         playerA: nick,
-        playerB: solo ? randomAiName() : '…',
+        playerB: solo ? foe.name : '…',
       }),
     });
     if (solo) {
-      const aiName = game.players?.b?.name || randomAiName();
+      state.aiWizard = foe.name;
+      state.aiLevel = foe.level;
+      ensureAiBook();
       game = await api(`/games/${encodeURIComponent(game.id)}/join`, {
         method: 'POST',
-        body: JSON.stringify({ playerId: 'b', name: aiName }),
+        body: JSON.stringify({ playerId: 'b', name: foe.name }),
       });
+    } else {
+      state.aiWizard = null;
     }
     state.game = game;
     state.playerId = 'a';
     state.solo = solo;
-    state.left = null;
-    state.right = null;
+    resetTurnChoices();
     state.waitingSubmit = false;
     state.pendingJoinId = null;
     state.view = 'duel';
     saveSession();
     clearJoinFromUrl();
     syncPoll();
+    if (solo) toast(`${foe.name} · ${aiTierByLevel(foe.level).label}`);
   } catch (e) {
     state.error = String(e.message || e);
   } finally {
@@ -593,6 +570,11 @@ async function resumeSession() {
     state.game = game;
     state.playerId = sess.playerId === 'b' ? 'b' : 'a';
     state.solo = !!sess.solo;
+    if (state.solo) {
+      state.aiWizard = sess.aiWizard || null;
+      state.aiLevel = sess.aiLevel || aiWizardByName(sess.aiWizard)?.level || 1;
+      ensureAiBook();
+    }
     state.view = 'duel';
     state.waitingSubmit = iAmWaiting();
     state.lastSpellVideoKey = castsVideoKey(game);
@@ -603,102 +585,24 @@ async function resumeSession() {
   }
 }
 
-/** Piano IA debole: spell facili, tanti pass/errori, niente combo letali. */
-const AI_WEAK_SPELLS = [
-  { id: 'shield', steps: [['P', ' ']] },
-  { id: 'missile', steps: [['S', ' '], ['D', ' ']] },
-  { id: 'causeLightWounds', steps: [['W', ' '], ['F', ' '], ['P', ' ']] },
-  { id: 'summonGoblin', steps: [['S', ' '], ['F', ' '], ['W', ' ']], self: true },
-  { id: 'fear', steps: [['S', ' '], ['W', ' '], ['D', ' ']] },
-  { id: 'cureLightWounds', steps: [['D', ' '], ['F', ' '], ['W', ' ']], self: true },
-  { id: 'amnesia', steps: [['D', ' '], ['P', ' '], ['P', ' ']] },
-];
-
-const AI_GESTURES = ['F', 'P', 'S', 'W', 'D', ' '];
-
 function aiSleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function aiRandomPair() {
-  const left = AI_GESTURES[Math.floor(Math.random() * AI_GESTURES.length)];
-  let right = AI_GESTURES[Math.floor(Math.random() * AI_GESTURES.length)];
-  // evita resa accidentale troppo spesso
-  if (left === 'P' && right === 'P' && Math.random() < 0.85) right = ' ';
-  return { left, right };
+/** Carica una volta il catalogo e lo converte in pattern per il cervello IA. */
+async function ensureAiBook() {
+  if (state.aiBook) return state.aiBook;
+  await loadSpells();
+  state.aiBook = buildSpellBook(state.spells || []);
+  return state.aiBook;
 }
 
-function aiPickTurn(game) {
-  const aiId = 'b';
-  const humanId = 'a';
-  if (!state.aiPlan) state.aiPlan = { queue: [], spell: null, self: false };
-
-  const plan = state.aiPlan;
-  const st = game.players?.[aiId]?.status || {};
-
-  // Fear / amnesia: lascia al server; l’IA prova comunque gesti banali
-  if (!plan.queue.length) {
-    const roll = Math.random();
-    if (st.diseaseTurns > 0 || st.poisonTurns > 0 || (game.players[aiId]?.damage || 0) >= 8) {
-      // un po’ più incline a curarsi
-      if (Math.random() < 0.55) {
-        const cure = AI_WEAK_SPELLS.find((s) => s.id === 'cureLightWounds');
-        plan.queue = cure.steps.map((s) => [...s]);
-        plan.spell = cure.id;
-        plan.self = true;
-      }
-    } else if (roll < 0.28) {
-      return { left: ' ', right: ' ' };
-    } else if (roll < 0.38) {
-      return { left: 'stab', right: ' ', stabTarget: humanId };
-    } else if (roll < 0.52) {
-      return aiRandomPair();
-    } else {
-      const spell = AI_WEAK_SPELLS[Math.floor(Math.random() * AI_WEAK_SPELLS.length)];
-      plan.queue = spell.steps.map((s) => [...s]);
-      plan.spell = spell.id;
-      plan.self = !!spell.self;
-      // 15% di “sbagliare” il piano a metà: lascia coda corta
-      if (Math.random() < 0.15 && plan.queue.length > 1) {
-        plan.queue = plan.queue.slice(0, 1);
-        plan.spell = null;
-      }
-    }
-  }
-
-  if (!plan.queue.length) return { left: ' ', right: ' ' };
-
-  const step = plan.queue.shift();
-  const last = plan.queue.length === 0;
-  const payload = {
-    left: step[0],
-    right: step[1],
-  };
-  if (last && plan.spell) {
-    payload.leftSpell = plan.spell;
-    // Solo override se serve (cure su sé); altrimenti default server
-    if (plan.self) {
-      payload.spellTargets = { left: aiId, right: aiId };
-    }
-  }
-  // 10% confonde le mani
-  if (Math.random() < 0.1 && payload.left !== 'C') {
-    const t = payload.left;
-    payload.left = payload.right;
-    payload.right = t;
-  }
-
-  const monsters = (game.monsters || []).filter((m) => m.alive && m.controllerId === aiId);
-  if (monsters.length) {
-    payload.monsterOrders = monsters.map((m) => ({
-      monsterId: m.id,
-      targetId: humanId,
-    }));
-  }
-  if (payload.left === 'stab' || payload.right === 'stab') {
-    payload.stabTarget = humanId;
-  }
-  return payload;
+function aiPickTurn(game, playerId = 'b') {
+  return chooseAiTurn(game, {
+    level: state.aiLevel || 1,
+    playerId,
+    book: state.aiBook || [],
+  });
 }
 
 async function autoPlayAi(game) {
@@ -707,30 +611,34 @@ async function autoPlayAi(game) {
   const opponent = pending.waitingFor[0];
   if (opponent === state.playerId) return game;
 
-  await aiSleep(450 + Math.floor(Math.random() * 550));
-  const turn = aiPickTurn(game);
+  await ensureAiBook();
+  // Le fasce alte "pensano" un attimo di più: dà il senso dell'avversario forte
+  await aiSleep(320 + (state.aiLevel || 1) * 120 + Math.floor(Math.random() * 400));
+  const turn = aiPickTurn(game, opponent);
   return api(`/games/${encodeURIComponent(game.id)}/turn`, {
     method: 'POST',
     body: JSON.stringify({ playerId: opponent, ...turn }),
   });
 }
 
-async function switchToAiOpponent() {
+async function switchToAiOpponent(wizard = null) {
   if (!state.game || state.solo) return;
+  const foe = wizard || aiRandomWizard();
   state.loading = true;
   state.error = null;
   render();
   try {
-    const aiName = randomAiName();
     const game = await api(`/games/${encodeURIComponent(state.game.id)}/join`, {
       method: 'POST',
-      body: JSON.stringify({ playerId: 'b', name: aiName }),
+      body: JSON.stringify({ playerId: 'b', name: foe.name }),
     });
     state.game = game;
     state.solo = true;
-    state.aiPlan = null;
+    state.aiWizard = foe.name;
+    state.aiLevel = foe.level;
+    ensureAiBook();
     saveSession();
-    toast(`Partita contro ${aiName}`);
+    toast(`Partita contro ${foe.name} · ${aiTierByLevel(foe.level).label}`);
     syncPoll();
   } catch (e) {
     state.error = String(e.message || e);
@@ -1017,7 +925,6 @@ function leaveToHome() {
   resetTurnChoices();
   state.waitingSubmit = false;
   state.error = null;
-  state.aiPlan = null;
   state.solo = false;
   state.lastSpellVideoKey = null;
   sessionStorage.removeItem(SESSION_KEY);
@@ -1133,34 +1040,57 @@ function renderAppBar() {
 
 function renderWelcome() {
   const nick = getNickname();
+  const tiers = AI_TIERS.map((t) => `
+    <section class="tier tier-${t.key}">
+      <div class="tier-head">
+        <span class="tier-rank" aria-hidden="true">${'✦'.repeat(t.level)}</span>
+        <span class="tier-name">${escapeHtml(t.label)}</span>
+        <span class="tier-blurb">${escapeHtml(t.blurb)}</span>
+      </div>
+      <div class="tier-wizards">
+        ${t.wizards.map((w) => `
+          <button type="button" class="wizard-chip" data-wizard="${escapeHtml(w.name)}"
+            title="${escapeHtml(w.note)}" ${state.loading ? 'disabled' : ''}>${escapeHtml(w.name)}</button>
+        `).join('')}
+      </div>
+    </section>
+  `).join('');
+
   app.innerHTML = `
-    <section class="hero">
+    <section class="hero hero-tight">
       <h1>Spellcaster</h1>
-      <p>Scegli con chi vuoi duellare.</p>
       <label class="nick-field">
         <span>Il tuo nickname</span>
-        <input id="nick-input" type="text" maxlength="24" placeholder="es. Merlin" value="${escapeHtml(nick)}" autocomplete="nickname" />
+        <input id="nick-input" type="text" maxlength="24" placeholder="es. Ambrosius" value="${escapeHtml(nick)}" autocomplete="nickname" />
       </label>
-      <div class="mode-pick">
-        <button class="btn btn-primary" id="btn-solo" ${state.loading ? 'disabled' : ''}>
-          ${state.loading ? 'Creazione…' : 'Contro IA'}
-        </button>
-        <button class="btn btn-ghost btn-block" id="btn-new" ${state.loading ? 'disabled' : ''}>
-          Contro un umano
-        </button>
-      </div>
-      <p class="mode-hint">Contro IA: entri subito in partita. Contro un umano: ottieni un link da condividere.</p>
       ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
     </section>
+
+    <section class="choose-foe">
+      <h2 class="choose-title">Scegli il tuo avversario</h2>
+      <p class="choose-hint">Più stelle, più è forte. L’Arcimago non perdona un gesto sprecato.</p>
+      ${tiers}
+    </section>
+
+    <section class="choose-human">
+      <button class="btn btn-ghost btn-block" id="btn-new" ${state.loading ? 'disabled' : ''}>
+        Contro un umano
+      </button>
+      <p class="mode-hint">Ottieni un link da passare al secondo giocatore.</p>
+    </section>
   `;
+
   const input = document.getElementById('nick-input');
   const persist = () => setNickname(input.value);
   input.addEventListener('change', persist);
   input.addEventListener('blur', persist);
-  document.getElementById('btn-solo').onclick = () => {
-    setNickname(input.value);
-    createGame({ solo: true });
-  };
+
+  app.querySelectorAll('.wizard-chip').forEach((btn) => {
+    btn.onclick = () => {
+      setNickname(input.value);
+      createGame({ solo: true, wizard: aiWizardByName(btn.dataset.wizard) });
+    };
+  });
   document.getElementById('btn-new').onclick = () => {
     setNickname(input.value);
     createGame({ solo: false });
@@ -1691,6 +1621,7 @@ function renderDuel() {
           </div>
           <div class="score-card">
             <div class="name">${escapeHtml(opp.name)}</div>
+            ${state.solo ? `<span class="foe-tier">${escapeHtml(aiTierByLevel(state.aiLevel).label)}</span>` : ''}
             <div class="hp" title="Punti vita">${wizardHp(opp.damage)}</div>
             ${statusBadges(opp.status)}
           </div>

@@ -1111,6 +1111,122 @@ html, body {
   }
 }
 
+/* --- scelta dell'avversario ---------------------------------------------- */
+
+.hero-tight {
+  padding: 28px 8px 12px;
+}
+
+.choose-foe {
+  margin-bottom: 18px;
+}
+
+.choose-title {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 1.05rem;
+  color: var(--accent);
+  margin: 0 0 4px;
+}
+
+.choose-hint {
+  margin: 0 0 14px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.tier {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow);
+}
+
+.tier-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 10px;
+}
+
+.tier-rank {
+  color: var(--accent);
+  letter-spacing: 0.12em;
+  font-size: 0.8rem;
+}
+
+.tier-name {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.tier-blurb {
+  font-size: 0.78rem;
+  color: var(--muted);
+  flex: 1 1 100%;
+}
+
+.tier-wizards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wizard-chip {
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.wizard-chip:hover:not(:disabled),
+.wizard-chip:focus-visible {
+  border-color: var(--accent);
+  background: rgba(232, 195, 106, 0.12);
+  transform: translateY(-1px);
+}
+
+.wizard-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* L'ultima fascia si nota */
+.tier-arcimago {
+  border-color: rgba(232, 195, 106, 0.5);
+}
+
+.tier-arcimago .wizard-chip {
+  border-color: rgba(232, 195, 106, 0.35);
+}
+
+.choose-human {
+  margin-bottom: 24px;
+}
+
+.foe-tier {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@media (min-width: 700px) {
+  .tier-wizards {
+    gap: 8px 10px;
+  }
+}
+
 /* Pulsante «ⓘ» nella barra in alto */
 .btn-icon {
   font-size: 1.1rem;
