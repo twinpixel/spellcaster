@@ -479,8 +479,7 @@ async function refreshGame() {
     if (iAmWaiting()) state.waitingSubmit = true;
     else if (game.turn !== prevTurn || JSON.stringify(game.lastTurnCasts || []) !== prevCasts) {
       state.waitingSubmit = false;
-      state.left = null;
-      state.right = null;
+      resetTurnChoices();
       if (game.lastTurnCasts?.length) {
         toast(`Incantesimi: ${game.lastTurnCasts.map((c) => c.spell).join(', ')}`);
         maybeShowSpellVideos(game);
@@ -736,6 +735,21 @@ async function switchToAiOpponent() {
   }
 }
 
+/** Azzera le scelte del turno appena risolto (mani, ordini, bersagli). */
+function resetTurnChoices() {
+  state.left = null;
+  state.right = null;
+  state.left2 = null;
+  state.right2 = null;
+  state.releaseDelayed = false;
+  state.monsterTargets = {};
+  state.spellTargetLeft = null;
+  state.spellTargetRight = null;
+  state.spellTargetLeftExplicit = false;
+  state.spellTargetRightExplicit = false;
+  state.stabTarget = null;
+}
+
 function myMonsters(game = state.game) {
   return (game?.monsters || []).filter((m) => m.alive && m.controllerId === state.playerId);
 }
@@ -797,6 +811,21 @@ function attackTargetOptions() {
   return opts;
 }
 
+/** Etichetta storico (`—`, `†`, `C`, `F`…) → codice di HAND_OPTIONS. */
+function labelToCode(label) {
+  const map = { '—': ' ', '†': 'stab', C: 'C' };
+  return map[label] || label;
+}
+
+/** HandAction del server → codice di HAND_OPTIONS. */
+function actionToCode(action) {
+  if (!action) return ' ';
+  if (action.kind === 'stab') return 'stab';
+  if (action.kind === 'clap') return 'C';
+  if (action.kind === 'gesture') return action.gesture;
+  return ' ';
+}
+
 function ensureDefaultTargets() {
   const other = oppId();
   if (!state.stabTarget) state.stabTarget = other;
@@ -805,13 +834,30 @@ function ensureDefaultTargets() {
   for (const m of myMonsters()) {
     if (!state.monsterTargets[m.id]) state.monsterTargets[m.id] = other;
   }
-  // Amnesia: show forced gestures from last turn
+
   const st = myStatus();
-  if (st.amnesia && st.lastAction) {
-    const map = { '—': ' ', '†': 'stab', C: 'C' };
-    const toCode = (lab) => map[lab] || lab;
-    if (state.left == null) state.left = toCode(st.lastAction.left);
-    if (state.right == null) state.right = toCode(st.lastAction.right);
+
+  // Amnesia: show forced gestures from last turn
+  if (st.amnesia) {
+    if (state.left == null) state.left = st.lastAction ? labelToCode(st.lastAction.left) : ' ';
+    if (state.right == null) state.right = st.lastAction ? labelToCode(st.lastAction.right) : ' ';
+  }
+
+  // Paralisi: la mano è bloccata in una posizione già decisa dal server
+  if (st.paralysis?.forced) {
+    const code = actionToCode(st.paralysis.forced);
+    if (st.paralysis.hand === 'right') {
+      if (state.right == null) state.right = code;
+    } else if (state.left == null) {
+      state.left = code;
+    }
+  }
+
+  // Charm: la mano controllata la sceglie l’avversario — qui basta un
+  // segnaposto, altrimenti il turno non sarebbe inviabile.
+  if (iAmCharmed()) {
+    const hand = st.charmPerson?.hand === 'right' ? 'right' : 'left';
+    if (state[hand] == null) state[hand] = ' ';
   }
 }
 
@@ -917,12 +963,7 @@ async function endTurn() {
       state.waitingSubmit = true;
     } else {
       state.waitingSubmit = false;
-      state.left = null;
-      state.right = null;
-      state.left2 = null;
-      state.right2 = null;
-      state.releaseDelayed = false;
-      state.monsterTargets = {};
+      resetTurnChoices();
       ensureDefaultTargets();
       if (game.lastTurnCasts?.length) {
         toast(`Incantesimi: ${game.lastTurnCasts.map((c) => c.spell).join(', ')}`);
@@ -961,36 +1002,23 @@ async function loadSpells() {
   }
 }
 
-async function restartNewGame() {
-  stopPoll();
-  state.game = null;
-  state.left = null;
-  state.right = null;
-  state.left2 = null;
-  state.right2 = null;
-  state.waitingSubmit = false;
-  state.error = null;
-  state.aiPlan = null;
-  state.solo = false;
-  sessionStorage.removeItem(SESSION_KEY);
-  clearJoinFromUrl();
-  state.view = 'welcome';
-  render();
-}
-
 function leaveToHome() {
   stopPoll();
   state.view = 'welcome';
   state.game = null;
-  state.left = null;
-  state.right = null;
+  resetTurnChoices();
   state.waitingSubmit = false;
   state.error = null;
   state.aiPlan = null;
   state.solo = false;
+  state.lastSpellVideoKey = null;
   sessionStorage.removeItem(SESSION_KEY);
   clearJoinFromUrl();
   render();
+}
+
+function restartNewGame() {
+  leaveToHome();
 }
 
 function renderAppBar() {
@@ -1141,8 +1169,13 @@ function gestureButtons(handKey) {
       reason = 'Charm: mano controllata';
     }
     if (paraHand === handSide && (handKey === 'left' || handKey === 'right')) {
-      // still selectable but server remaps — hint via title
-      reason = reason || 'Paralisi: gesto modificato';
+      if (st.paralysis?.forced) {
+        disabled = true;
+        reason = 'Paralisi: mano bloccata';
+      } else {
+        // still selectable but server remaps — hint via title
+        reason = reason || 'Paralisi: gesto modificato';
+      }
     }
     const thumb = o.img
       ? `<img src="${o.img}" alt="${escapeHtml(o.title)}" /><span class="gesture-letter">${escapeHtml(o.label)}</span>`
@@ -1154,7 +1187,11 @@ function gestureButtons(handKey) {
 function renderHand(title, handKey) {
   const selected = state[handKey];
   const ready = selected != null;
-  const bothPalm = state.left === 'P' && state.right === 'P';
+  // La resa è (p sulla coppia di mani corrispondente, non «una P qualsiasi»
+  const pair = handKey === 'left2' || handKey === 'right2'
+    ? [state.left2, state.right2]
+    : [state.left, state.right];
+  const bothPalm = pair[0] === 'P' && pair[1] === 'P';
   let preview;
   if (bothPalm) {
     preview = `<span class="gesture-thumb selected" title="Resa"><img src="img/surrender.jpg" alt="Resa" /><span class="gesture-letter">PP</span></span>`;
@@ -1315,16 +1352,6 @@ function SPELL_META_NAME(id) {
   return map[id] || id;
 }
 
-function renderTargetSelect(id, value, opts) {
-  return `
-    <select class="target-select" id="${id}">
-      ${opts.map((o) => `
-        <option value="${escapeHtml(o.id)}" ${o.id === value ? 'selected' : ''}>${escapeHtml(o.label)}</option>
-      `).join('')}
-    </select>
-  `;
-}
-
 /** Domande da fare prima di inviare il turno (solo se servono). */
 function collectTurnPrompts() {
   ensureDefaultTargets();
@@ -1386,6 +1413,28 @@ function collectTurnPrompts() {
     }
   }
 
+  // Bersaglio esplicito di un incantesimo: ha senso solo con creature in campo
+  const allTargets = targetOptions();
+  if (allTargets.length > 2) {
+    const withAuto = [{ id: 'auto', label: 'Automatico' }, ...allTargets];
+    const hands = [
+      ['left', 'spellLeft', 'spell-target-left', 'Bersaglio incantesimo SX', state.spellTargetLeftExplicit, state.spellTargetLeft],
+      ['right', 'spellRight', 'spell-target-right', 'Bersaglio incantesimo DX', state.spellTargetRightExplicit, state.spellTargetRight],
+    ];
+    for (const [handKey, kind, id, label, explicit, value] of hands) {
+      const code = state[handKey];
+      if (code == null || code === ' ' || code === 'stab') continue;
+      prompts.push({
+        kind,
+        id,
+        label,
+        type: 'select',
+        value: explicit ? value : 'auto',
+        opts: withAuto,
+      });
+    }
+  }
+
   if (st.delayedBank) {
     prompts.push({
       kind: 'releaseDelayed',
@@ -1423,9 +1472,13 @@ function applyPromptValues(root) {
     } else if (kind === 'stab') state.stabTarget = val;
     else if (kind === 'charmForced') state.charmForced = val;
     else if (kind === 'releaseDelayed') state.releaseDelayed = !!val;
-    else if (kind === 'spellLeft') state.spellTargetLeft = val;
-    else if (kind === 'spellRight') state.spellTargetRight = val;
-    else if (kind === 'elemental') state.elementalType = val;
+    else if (kind === 'spellLeft') {
+      state.spellTargetLeftExplicit = val !== 'auto';
+      if (val !== 'auto') state.spellTargetLeft = val;
+    } else if (kind === 'spellRight') {
+      state.spellTargetRightExplicit = val !== 'auto';
+      if (val !== 'auto') state.spellTargetRight = val;
+    } else if (kind === 'elemental') state.elementalType = val;
     else if (kind === 'charmHand') state.charmHand = val;
     else if (kind === 'paralysisHand') state.paralysisHand = val;
   }
@@ -1513,8 +1566,13 @@ function renderEffectHints() {
   if (st.amnesia) hints.push('Amnesia: ripeterai i gesti del turno scorso.');
   if (st.fear) hints.push('Fear: non puoi usare C, D, F, S.');
   if (st.confusion) hints.push('Confusion: un gesto sarà sostituito a caso.');
-  if (iAmCharmed()) hints.push(`Charm: la mano ${st.charmPerson?.hand === 'right' ? 'destra' : 'sinistra'} è controllata.`);
-  if (st.paralysis) hints.push(`Paralisi: la mano ${st.paralysis.hand === 'right' ? 'destra' : 'sinistra'} verrà rimappata.`);
+  if (iAmCharmed()) hints.push(`Charm: la mano ${st.charmPerson?.hand === 'right' ? 'destra' : 'sinistra'} è controllata dall’avversario.`);
+  if (st.paralysis) {
+    const side = st.paralysis.hand === 'right' ? 'destra' : 'sinistra';
+    hints.push(st.paralysis.forced
+      ? `Paralisi: la mano ${side} resta bloccata su ${handLabel(actionToCode(st.paralysis.forced))}.`
+      : `Paralisi: la mano ${side} verrà rimappata.`);
+  }
   if (st.hasteTurns > 0) hints.push('Haste: puoi fare una seconda coppia di gesti.');
   if (state.game?.extraTurnFor === state.playerId) hints.push('Time stop: turno extra solo per te.');
   if (!hints.length) {

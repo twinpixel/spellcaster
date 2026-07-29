@@ -165,6 +165,30 @@ describe('spell detection (tutti i pattern)', () => {
   }
 });
 
+describe('gesti a due mani', () => {
+  it('un gesto fatto con entrambe le mani vale per la sequenza di ciascuna mano', () => {
+    // Spellcaster.html, partita d’esempio: «Black does 2 F gestures» completa
+    // sia la blindness (mano destra) sia la resist cold (mano sinistra).
+    const { svc, id } = fresh();
+    playTurns(svc, id, [{ left: 'S', right: 'S' }], []);
+    const snap = playTurns(svc, id, [{ left: 'D', right: 'D' }], []);
+    const missiles = (snap.lastTurnCasts || []).filter(
+      (c) => c.spell === 'missile' && c.casterId === 'a',
+    );
+    expect(missiles).toHaveLength(2);
+    expect(snap.players.b.damage).toBe(2);
+  });
+
+  it('i passi «(x» richiedono comunque entrambe le mani', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    st.wizardA.leftHand.symbols = [{ t: 'clap' }];
+    const result = playTurn(st, parseTurn('W', ' '), parseTurn(' ', ' '));
+    expect(result.castsA.some((c) => c.spell === 'magicMirror')).toBe(false);
+  });
+});
+
 // --- protezione -----------------------------------------------------------
 
 describe('protection', () => {
@@ -276,6 +300,24 @@ describe('protection', () => {
     expect(state.wizardB.status.diseaseTurns).toBe(0);
   });
 
+  it('counter-spell non ferma raise dead su un cadavere', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    st.wizardB.damage = 15;
+    preloadPattern(st.wizardA, SPELL_PATTERNS.raiseDead[0]);
+    preloadPattern(st.wizardB, SPELL_PATTERNS.counterSpell[0]);
+    const result = playTurn(st, parseTurn('C', 'C'), parseTurn('P', ' '), {
+      leftChoiceA: 'raiseDead',
+      leftChoiceB: 'counterSpell',
+      spellTargetA: { left: 'b' },
+      spellTargetB: { left: 'b' },
+    });
+    expect(result.castsA.some((c) => c.spell === 'raiseDead')).toBe(true);
+    expect(st.wizardB.damage).toBe(0);
+    expect(st.finished).toBe(false);
+  });
+
   it('dispel magic distrugge mostri', () => {
     const state = newGame();
     state.wizardA.status.antiSpellNextTurn = false;
@@ -345,7 +387,9 @@ describe('damaging spells', () => {
     expect(st.wizardB.damage).toBe(0);
   });
 
-  it('ice storm annulla fireball nello stesso turno', () => {
+  it('ice storm annulla il fireball solo sul suo soggetto', () => {
+    // «the subject of the fireball is instead not harmed by either spell,
+    //  although the storm will affect others as normal»
     const st = newGame();
     st.wizardA.status.antiSpellNextTurn = false;
     st.wizardB.status.antiSpellNextTurn = false;
@@ -356,8 +400,68 @@ describe('damaging spells', () => {
       leftChoiceB: 'iceStorm',
     });
     expect(result.castsA.some((c) => c.spell === 'fireball')).toBe(false);
+    expect(st.wizardB.damage).toBe(0); // soggetto del fireball: illeso
+    expect(st.wizardA.damage).toBe(5); // colpito dalla tempesta come tutti
+  });
+
+  it('due fire storm contano come una sola', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    preloadPattern(st.wizardA, SPELL_PATTERNS.fireStorm[0]);
+    preloadPattern(st.wizardB, SPELL_PATTERNS.fireStorm[0]);
+    playTurn(st, parseTurn('C', 'C'), parseTurn('C', 'C'), {
+      leftChoiceA: 'fireStorm',
+      leftChoiceB: 'fireStorm',
+    });
     expect(st.wizardA.damage).toBe(5);
     expect(st.wizardB.damage).toBe(5);
+  });
+
+  it('counter-spell protegge solo il soggetto dalla tempesta', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    preloadPattern(st.wizardA, SPELL_PATTERNS.fireStorm[0]);
+    preloadPattern(st.wizardB, SPELL_PATTERNS.counterSpell[0]);
+    const result = playTurn(st, parseTurn('C', 'C'), parseTurn('P', ' '), {
+      leftChoiceA: 'fireStorm',
+      leftChoiceB: 'counterSpell',
+      spellTargetB: { left: 'b' },
+    });
+    expect(result.castsA.some((c) => c.spell === 'fireStorm')).toBe(true);
+    expect(st.wizardB.damage).toBe(0);
+    expect(st.wizardA.damage).toBe(5);
+  });
+
+  it('una cura simultanea sottrae al danno del turno', () => {
+    // «as if that point had not been inflicted»
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    preloadPattern(st.wizardA, SPELL_PATTERNS.lightningBoltLong[0]);
+    preloadPattern(st.wizardB, SPELL_PATTERNS.cureLightWounds[0]);
+    playTurn(st, parseTurn('D', ' '), parseTurn('W', ' '), {
+      leftChoiceA: 'lightningBoltLong',
+      leftChoiceB: 'cureLightWounds',
+      spellTargetB: { left: 'b' },
+    });
+    expect(st.wizardB.damage).toBe(4);
+  });
+
+  it('nessuna cura riporta in vita chi subisce finger of death', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    preloadPattern(st.wizardA, SPELL_PATTERNS.fingerOfDeath[0]);
+    preloadPattern(st.wizardB, SPELL_PATTERNS.cureLightWounds[0]);
+    playTurn(st, parseTurn('D', ' '), parseTurn('W', ' '), {
+      leftChoiceA: 'fingerOfDeath',
+      leftChoiceB: 'cureLightWounds',
+      spellTargetB: { left: 'b' },
+    });
+    expect(st.finished).toBe(true);
+    expect(st.winnerId).toBe('a');
   });
 
   it('fire storm e ice storm si annullano', () => {
@@ -436,6 +540,43 @@ describe('summons', () => {
     st.wizardB.status.antiSpellNextTurn = false;
     castInstant('summonElemental', { state: st, elementalType: 'fire' });
     expect(st.wizardB.damage).toBe(0);
+  });
+
+  it('un elementale colpisce chiunque non resista, controllore incluso', () => {
+    const { state } = castInstant('summonElemental', { elementalType: 'fire' });
+    expect(state.wizardA.damage).toBe(3);
+    expect(state.wizardB.damage).toBe(3);
+  });
+
+  it('un elementale di ghiaccio neutralizza la fire storm e viene distrutto', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    castInstant('summonElemental', { state: st, caster: 'b', elementalType: 'ice' });
+    const dmgA = st.wizardA.damage;
+    const dmgB = st.wizardB.damage;
+
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    castInstant('fireStorm', { state: st });
+    expect(st.monsters.every((m) => !m.alive)).toBe(true);
+    expect(st.wizardA.damage).toBe(dmgA);
+    expect(st.wizardB.damage).toBe(dmgB);
+  });
+
+  it('due elementali dello stesso tipo si fondono in uno solo', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    preloadPattern(st.wizardA, SPELL_PATTERNS.summonElemental[0]);
+    preloadPattern(st.wizardB, SPELL_PATTERNS.summonElemental[0]);
+    playTurn(st, parseTurn('S', ' '), parseTurn('S', ' '), {
+      leftChoiceA: 'summonElemental',
+      leftChoiceB: 'summonElemental',
+      elementalTypeA: 'fire',
+      elementalTypeB: 'fire',
+    });
+    expect(st.monsters.filter((m) => m.alive)).toHaveLength(1);
   });
 
   it('elementali opposti si annullano', () => {
@@ -552,20 +693,40 @@ describe('enchantments', () => {
     expect(snap.history[0].b.right).toBe('W');
   });
 
-  it('paralysis rimappa S→F', () => {
+  it('paralysis blocca la mano nella posizione del turno di lancio (S→D)', () => {
+    // «that hand is paralyzed into the position it is in this turn»,
+    // con C, S, W trasformati rispettivamente in F, D, P.
     const st = newGame();
     st.wizardA.status.antiSpellNextTurn = false;
     st.wizardB.status.antiSpellNextTurn = false;
     castInstant('paralysis', {
       state: st,
+      foeAction: parseTurn('S', 'W'),
       choices: { paralysisHandA: 'left' },
     });
-    if (!st.wizardB.status.paralysis) {
-      st.wizardB.status.paralysis = { hand: 'left' };
-    }
-    playTurn(st, parseTurn(' ', ' '), parseTurn('S', 'W'));
-    expect(st.wizardB.status.lastAction.left).toEqual({ kind: 'gesture', gesture: 'F' });
+    expect(st.wizardB.status.paralysis).toEqual({
+      hand: 'left',
+      forced: { kind: 'gesture', gesture: 'D' },
+    });
+
+    playTurn(st, parseTurn(' ', ' '), parseTurn('P', 'W'));
+    expect(st.wizardB.status.lastAction.left).toEqual({ kind: 'gesture', gesture: 'D' });
     expect(st.wizardB.status.lastAction.right).toEqual({ kind: 'gesture', gesture: 'W' });
+    expect(st.wizardB.status.lastParalyzedHand).toBe(null);
+  });
+
+  it('una nuova paralisi ricade sulla stessa mano già paralizzata', () => {
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    st.wizardB.status.paralysis = { hand: 'right', forced: { kind: 'gesture', gesture: 'P' } };
+    // Il lanciatore chiede «left», ma la mano già paralizzata è la destra
+    castInstant('paralysis', {
+      state: st,
+      foeAction: parseTurn('F', 'W'),
+      choices: { paralysisHandA: 'left' },
+    });
+    expect(st.wizardB.status.paralysis.hand).toBe('right');
   });
 
   it('anti-spell azzera i buffer al turno successivo', () => {
@@ -731,6 +892,19 @@ describe('non-spells', () => {
     expect(st.wizardB.damage).toBe(1);
   });
 
+  it('doppia pugnalata: un solo danno e sequenze azzerate', () => {
+    // «The wizard only has one knife so can only stab with one hand in any turn»
+    const st = newGame();
+    st.wizardA.status.antiSpellNextTurn = false;
+    st.wizardB.status.antiSpellNextTurn = false;
+    st.wizardA.leftHand.symbols = [{ t: 'single', g: 'S' }];
+    st.wizardA.rightHand.symbols = [{ t: 'single', g: 'S' }];
+    playTurn(st, parseTurn('stab', 'stab'), parseTurn(' ', ' '));
+    expect(st.wizardB.damage).toBe(1);
+    expect(st.wizardA.leftHand.symbols).toHaveLength(0);
+    expect(st.wizardA.rightHand.symbols).toHaveLength(0);
+  });
+
   it('resa P-P perde; doppia resa = pareggio', () => {
     let st = newGame();
     st.wizardA.status.antiSpellNextTurn = false;
@@ -745,6 +919,33 @@ describe('non-spells', () => {
     playTurn(st, parseTurn('P', 'P'), parseTurn('P', 'P'));
     expect(st.finished).toBe(true);
     expect(st.isDraw).toBe(true);
+  });
+});
+
+describe('regole opzionali', () => {
+  it('charm person non può imporre «nulla» salvo regola attiva', () => {
+    const state = newGame();
+    state.wizardA.status.charmPerson = { controllerId: 'b', hand: 'left' };
+    const action = parseTurn('W', 'S');
+    const notes = applyPreTurnConstraints(state.wizardA, action, { charmForced: ' ' });
+    expect(notes).toContain('charm:rifiutato');
+    expect(action.left).toEqual({ kind: 'gesture', gesture: 'W' });
+
+    state.wizardA.status.charmPerson = { controllerId: 'b', hand: 'left' };
+    const action2 = parseTurn('W', 'S');
+    const notes2 = applyPreTurnConstraints(state.wizardA, action2, {
+      charmForced: ' ',
+      allowCharmNothing: true,
+    });
+    expect(notes2).toContain('charm');
+    expect(action2.left).toEqual({ kind: 'nothing' });
+  });
+
+  it('allowCharmNothing viaggia da createGame allo snapshot', () => {
+    const svc = createGameService();
+    const snap = svc.createGame({ allowCharmNothing: true });
+    expect(snap.rules.allowCharmNothing).toBe(true);
+    expect(createGameService().createGame().rules.allowCharmNothing).toBe(false);
   });
 });
 

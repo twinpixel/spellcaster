@@ -9,13 +9,15 @@ import {
   clearEnchantments,
   statusJson,
   applyPreTurnConstraints,
+  paralyzedPosition,
   tickEndOfTurn,
   MIND_GROUP,
   ENCHANTMENT_SPELLS,
   PERMANENCY_EXCLUDED,
+  WIZARD_MAX_DAMAGE,
 } from './status.js';
 
-export const WIZARD_MAX_DAMAGE = 14;
+export { WIZARD_MAX_DAMAGE };
 
 export const GESTURES = ['F', 'P', 'S', 'W', 'D'];
 
@@ -166,6 +168,17 @@ export function hasDoubleStab(action) {
   return action.left.kind === 'stab' && action.right.kind === 'stab';
 }
 
+/**
+ * «The wizard only has one knife so can only stab with one hand in any turn»:
+ * una doppia pugnalata non è legale, la mano destra decade a «nulla».
+ * Muta l’azione sul posto e restituisce true se ha corretto qualcosa.
+ */
+export function normalizeDoubleStab(action) {
+  if (!hasDoubleStab(action)) return false;
+  action.right = { kind: 'nothing' };
+  return true;
+}
+
 function emptyHand() {
   return { symbols: [] };
 }
@@ -190,8 +203,16 @@ function recordFromAction(hand, handAction, turn) {
   }
 }
 
+/**
+ * Un gesto eseguito con entrambe le mani (`(x`) è pur sempre quel gesto per
+ * ciascuna mano: vale sia per i passi `single` sia per quelli `both`.
+ * (Spellcaster.html, partita d’esempio ai turni 9/14/15: «Black does 2 F
+ * gestures» completa una F sia della blindness sia della resist cold.)
+ */
 function stepMatches(symbol, step) {
-  if (step.t === 'single') return symbol.t === 'single' && symbol.g === step.g;
+  if (step.t === 'single') {
+    return (symbol.t === 'single' || symbol.t === 'both') && symbol.g === step.g;
+  }
   if (step.t === 'clap') return symbol.t === 'clap';
   if (step.t === 'both') return symbol.t === 'both' && symbol.g === step.g;
   return false;
@@ -256,6 +277,9 @@ const DAMAGING_SPELLS = new Set([
   'fireball',
 ]);
 
+/** Incantesimi «coperta»: colpiscono tutti, non hanno un vero soggetto. */
+const BLANKET_SPELLS = new Set(['fireStorm', 'iceStorm']);
+
 const OFFENSIVE_ENCHANTMENTS = new Set([
   'amnesia',
   'confusion',
@@ -286,13 +310,16 @@ function defaultTarget(spell, casterId, foeId) {
 
 function applyDamage(wizard, amount) {
   if (amount >= 999) {
+    // Finger of death: uccide sul colpo, nessuna cura simultanea lo annulla
     wizard.damage = WIZARD_MAX_DAMAGE + 1;
+    wizard.slain = true;
     return;
   }
   wizard.damage = Math.min(99, wizard.damage + amount);
 }
 
 function applyCure(wizard, amount) {
+  if (wizard.slain) return;
   wizard.damage = Math.max(0, wizard.damage - amount);
 }
 
@@ -356,6 +383,16 @@ function hurtMonster(monster, amount) {
 
 function isWizardId(id) {
   return id === 'a' || id === 'b';
+}
+
+/** true se il bersaglio è un cadavere (mago morto o mostro ucciso). */
+function isDeadTarget(state, id) {
+  if (isWizardId(id)) {
+    const w = wizardById(state, id);
+    return !!w && w.damage > WIZARD_MAX_DAMAGE;
+  }
+  const m = monsterById(state, id);
+  return !!m && !m.alive;
 }
 
 function resolveTargetHit(state, targetId, amount, shielded, opts = {}) {
@@ -441,7 +478,11 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
   for (const c of active) {
     if (c.cancelled) continue;
     if (c.spell === 'counterSpell' || c.spell === 'dispelMagic' || c.spell === 'fingerOfDeath') continue;
-    if (isWizardId(c.targetId) && countered.has(c.targetId)) c.cancelled = true;
+    // Tempeste: il counter-spell protegge solo il proprio soggetto, non le annulla
+    if (BLANKET_SPELLS.has(c.spell)) continue;
+    // Raise dead su un cadavere non è fermabile dal counter-spell (solo dal dispel)
+    if (c.spell === 'raiseDead' && isDeadTarget(state, c.targetId)) continue;
+    if (countered.has(c.targetId)) c.cancelled = true;
   }
 
   const mirrored = new Set(
@@ -449,16 +490,13 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
   );
   for (const c of active) {
     if (c.cancelled) continue;
-    // Mirror reflects pointed spells (not storms / summons / stabs)
-    const reflectable = DAMAGING_SPELLS.has(c.spell) || c.spell === 'fingerOfDeath'
-      || ENCHANTMENT_SPELLS.has(c.spell);
-    if (!reflectable) continue;
-    if (c.spell === 'fireStorm' || c.spell === 'iceStorm') continue;
-    if (isWizardId(c.targetId) && mirrored.has(c.targetId) && !countered.has(c.targetId) && !hasDispel) {
-      // No mirror if counter/dispel on subject
-      if (countered.has(c.targetId)) continue;
-      c.targetId = c.casterId;
-    }
+    // Il mirror riflette solo gli incantesimi «puntati»: non tempeste, evocazioni o stab
+    const reflectable = DAMAGING_SPELLS.has(c.spell) || ENCHANTMENT_SPELLS.has(c.spell);
+    if (!reflectable || BLANKET_SPELLS.has(c.spell)) continue;
+    if (!mirrored.has(c.targetId)) continue;
+    // Nessun effetto se il soggetto del mirror è anche soggetto di un counter-spell
+    if (countered.has(c.targetId)) continue;
+    c.targetId = c.casterId;
   }
 
   // Incompatible mind-control group: ≥2 on same subject → all cancel
@@ -480,11 +518,14 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       if (c.spell === 'fireStorm' || c.spell === 'iceStorm') c.cancelled = true;
     }
   }
-  // Fireball vs ice storm on same subject → both cancel for that subject
-  for (const c of active) {
-    if (c.cancelled || c.spell !== 'fireball') continue;
-    if (active.some((x) => !x.cancelled && x.spell === 'iceStorm')) {
+  // Fireball + ice storm: il soggetto del fireball non è colpito da nessuno dei
+  // due, mentre la tempesta continua a colpire tutti gli altri.
+  const stormImmune = new Set();
+  if (active.some((c) => !c.cancelled && c.spell === 'iceStorm')) {
+    for (const c of active) {
+      if (c.cancelled || c.spell !== 'fireball') continue;
       c.cancelled = true;
+      if (c.targetId) stormImmune.add(c.targetId);
     }
   }
 
@@ -554,6 +595,8 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
   }
 
   const pendingSummons = [];
+  /** Le cure valgono «come se il danno non fosse stato inflitto»: si applicano dopo. */
+  const deferredCures = [];
   let destroyAllMonstersAfterAttack = hasDispel;
 
   for (const c of active) {
@@ -596,29 +639,15 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         }
         break;
       case 'fireStorm':
-        for (const w of [state.wizardA, state.wizardB]) {
-          if (!w.status.resistHeat) applyDamage(w, 5);
-        }
-        for (const m of livingMonsters(state)) {
-          if (m.elementalType === 'ice') hurtMonster(m, 999);
-          else if (m.elementalType !== 'fire') hurtMonster(m, 5);
-        }
-        break;
       case 'iceStorm':
-        for (const w of [state.wizardA, state.wizardB]) {
-          if (!w.status.resistCold) applyDamage(w, 5);
-        }
-        for (const m of livingMonsters(state)) {
-          if (m.elementalType === 'fire') hurtMonster(m, 999);
-          else if (m.elementalType !== 'ice') hurtMonster(m, 5);
-        }
+        // Risolte dopo le evocazioni: tempeste ed elementali interagiscono
         break;
       case 'cureLightWounds':
-        if (targetWizard) applyCure(targetWizard, 1);
+        if (targetWizard) deferredCures.push({ wizard: targetWizard, amount: 1 });
         break;
       case 'cureHeavyWounds':
         if (targetWizard) {
-          applyCure(targetWizard, 2);
+          deferredCures.push({ wizard: targetWizard, amount: 2 });
           targetWizard.status.diseaseTurns = 0;
         }
         break;
@@ -626,9 +655,10 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         if (targetWizard) {
           if (targetWizard.damage > WIZARD_MAX_DAMAGE) {
             targetWizard.damage = 0;
+            targetWizard.slain = false;
             clearEnchantments(targetWizard);
           } else {
-            applyCure(targetWizard, 5);
+            deferredCures.push({ wizard: targetWizard, amount: 5 });
           }
         } else {
           const m = monsterById(state, c.targetId);
@@ -698,11 +728,16 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       }
       case 'paralysis':
         if (targetWizard) {
-          const hand =
+          const picked =
             c.casterId === state.wizardA.id
               ? (choices.paralysisHandA || 'left')
               : (choices.paralysisHandB || 'left');
-          targetWizard.status.paralysis = { hand };
+          // Se una mano è già paralizzata dev’essere ancora quella
+          const hand = targetWizard.status.lastParalyzedHand || picked;
+          const victimAction = targetWizard.id === state.wizardA.id ? actionA : actionB;
+          const current = hand === 'right' ? victimAction.right : victimAction.left;
+          // La mano resta bloccata nella posizione tenuta in questo turno
+          targetWizard.status.paralysis = { hand, forced: paralyzedPosition(current) };
         } else {
           const m = monsterById(state, c.targetId);
           if (m) m.paralyzedPending = true;
@@ -771,6 +806,18 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     }
   }
 
+  // Due elementali dello stesso tipo si fondono in uno solo di forza normale
+  for (const kind of ['fire', 'ice']) {
+    const same = livingMonsters(state).filter((m) => m.elementalType === kind);
+    if (same.length < 2) continue;
+    const keep = same[0];
+    keep.hp = keep.maxHp;
+    for (const m of same.slice(1)) {
+      hurtMonster(m, 999);
+      monsterLog[m.id] = { label: m.label, text: 'fuso' };
+    }
+  }
+
   // Opposing elementals annihilate
   const fires = livingMonsters(state).filter((m) => m.elementalType === 'fire');
   const ices = livingMonsters(state).filter((m) => m.elementalType === 'ice');
@@ -780,6 +827,44 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       monsterLog[m.id] = { label: m.label, text: 'annullato' };
     }
   }
+
+  // --- Tempeste ------------------------------------------------------------
+  // Un elementale del tipo opposto neutralizza la tempesta ma viene distrutto;
+  // una tempesta distrugge anche gli elementali del proprio tipo senza
+  // esserne neutralizzata.
+  const hasFireStorm = active.some((c) => !c.cancelled && c.spell === 'fireStorm');
+  const hasIceStorm = active.some((c) => !c.cancelled && c.spell === 'iceStorm');
+
+  function resolveStorm(kind) {
+    const opposite = kind === 'fire' ? 'ice' : 'fire';
+    const resistKey = kind === 'fire' ? 'resistHeat' : 'resistCold';
+    const living = livingMonsters(state);
+    const opposing = living.filter((m) => m.elementalType === opposite);
+    const own = living.filter((m) => m.elementalType === kind);
+
+    for (const m of opposing) {
+      hurtMonster(m, 999);
+      monsterLog[m.id] = { label: m.label, text: 'tempesta☠' };
+    }
+    if (opposing.length) return; // tempesta neutralizzata: nessun danno
+
+    for (const m of own) {
+      hurtMonster(m, 999);
+      monsterLog[m.id] = { label: m.label, text: 'tempesta☠' };
+    }
+    for (const w of [state.wizardA, state.wizardB]) {
+      if (w.status[resistKey]) continue;
+      if (countered.has(w.id) || stormImmune.has(w.id)) continue;
+      applyDamage(w, 5);
+    }
+    for (const m of livingMonsters(state)) {
+      if (countered.has(m.id) || stormImmune.has(m.id)) continue;
+      hurtMonster(m, 5);
+    }
+  }
+
+  if (hasFireStorm) resolveStorm('fire');
+  if (hasIceStorm) resolveStorm('ice');
 
   function orderTarget(orders, monsterId, controllerId) {
     const hit = (orders || []).find((o) => o.monsterId === monsterId);
@@ -792,6 +877,26 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     if (m.paralyzed) {
       monsterLog[m.id] = { label: m.label, text: 'paralisi' };
       m.paralyzed = false;
+      continue;
+    }
+
+    // Gli elementali non prendono ordini: colpiscono chiunque non resista al
+    // loro tipo e non sia protetto da uno shield (anche il proprio controllore).
+    if (m.elementalType) {
+      const resistKey = m.elementalType === 'fire' ? 'resistHeat' : 'resistCold';
+      const hits = [];
+      for (const w of [state.wizardA, state.wizardB]) {
+        if (w.status[resistKey] || shielded.has(w.id)) continue;
+        if (w.status.invisibilityTurns > 0 && m.controllerId !== w.id) continue;
+        applyDamage(w, m.attack);
+        hits.push(w.name);
+      }
+      for (const other of livingMonsters(state)) {
+        if (other.id === m.id || other.elementalType) continue;
+        hurtMonster(other, m.attack);
+        hits.push(other.label);
+      }
+      monsterLog[m.id] = { label: m.label, text: hits.length ? `→${hits.join(' ')}` : '—' };
       continue;
     }
 
@@ -815,22 +920,6 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       const tw = wizardById(state, targetId);
       if (tw?.status.invisibilityTurns > 0 && m.controllerId !== targetId) {
         monsterLog[m.id] = { label: m.label, text: 'invis' };
-        continue;
-      }
-    }
-
-    // Elemental vs resist
-    if (m.elementalType === 'fire' && isWizardId(targetId)) {
-      const w = wizardById(state, targetId);
-      if (w?.status.resistHeat) {
-        monsterLog[m.id] = { label: m.label, text: 'resist' };
-        continue;
-      }
-    }
-    if (m.elementalType === 'ice' && isWizardId(targetId)) {
-      const w = wizardById(state, targetId);
-      if (w?.status.resistCold) {
-        monsterLog[m.id] = { label: m.label, text: 'resist' };
         continue;
       }
     }
@@ -869,14 +958,17 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     }
   }
 
-  // Stab
+  // Stab (un solo pugnale per mago, quindi al massimo 1 danno per turno)
   function resolveStab(action, attackerId, stabTarget) {
     if (action.left.kind !== 'stab' && action.right.kind !== 'stab') return;
-    const targetId = stabTarget || foe(attackerId);
+    const targetId = stabTarget && stabTarget !== attackerId ? stabTarget : foe(attackerId);
     resolveTargetHit(state, targetId, 1, shielded);
   }
   resolveStab(actionA, state.wizardA.id, choices.stabTargetA);
   resolveStab(actionB, state.wizardB.id, choices.stabTargetB);
+
+  // Le cure valgono come se il danno del turno non fosse stato inflitto
+  for (const { wizard, amount } of deferredCures) applyCure(wizard, amount);
 
   return {
     casts: active.filter((c) => !c.cancelled || c.banked).map((c) => ({
@@ -895,6 +987,7 @@ function createWizard(id, name) {
     id,
     name,
     damage: 0,
+    slain: false,
     leftHand: emptyHand(),
     rightHand: emptyHand(),
     usedShortLightning: false,
@@ -958,29 +1051,39 @@ export function playTurn(state, actionA, actionB, choices = {}) {
     right: { ...actionB.right },
   };
 
+  const allowCharmNothing = !!state.rules?.allowCharmNothing;
   const notesA = applyPreTurnConstraints(state.wizardA, actA, {
     charmForced: choices.charmForcedA,
-    charmHand: choices.charmHandVictimA,
+    allowCharmNothing,
   });
   const notesB = applyPreTurnConstraints(state.wizardB, actB, {
     charmForced: choices.charmForcedB,
-    charmHand: choices.charmHandVictimB,
+    allowCharmNothing,
   });
+
+  // Un mago ha un solo pugnale: la seconda pugnalata dello stesso turno decade
+  normalizeDoubleStab(actA);
+  normalizeDoubleStab(actB);
 
   if (isSurrender(actA) && isSurrender(actB)) {
     state.finished = true;
     state.isDraw = true;
-    return { state, castsA: [], castsB: [], monsterLog: {}, surrendered: true, draw: true };
+    return {
+      state,
+      castsA: [],
+      castsB: [],
+      monsterLog: {},
+      surrendered: true,
+      draw: true,
+      actionA: actA,
+      actionB: actB,
+    };
   }
 
-  if (!hasDoubleStab(actA)) {
-    recordFromAction(state.wizardA.leftHand, actA.left, actA);
-    recordFromAction(state.wizardA.rightHand, actA.right, actA);
-  }
-  if (!hasDoubleStab(actB)) {
-    recordFromAction(state.wizardB.leftHand, actB.left, actB);
-    recordFromAction(state.wizardB.rightHand, actB.right, actB);
-  }
+  recordFromAction(state.wizardA.leftHand, actA.left, actA);
+  recordFromAction(state.wizardA.rightHand, actA.right, actA);
+  recordFromAction(state.wizardB.leftHand, actB.left, actB);
+  recordFromAction(state.wizardB.rightHand, actB.right, actB);
 
   let castsA = detectCasts(state.wizardA, choices.leftChoiceA, choices.rightChoiceA);
   let castsB = detectCasts(state.wizardB, choices.leftChoiceB, choices.rightChoiceB);
@@ -995,7 +1098,7 @@ export function playTurn(state, actionA, actionB, choices = {}) {
     } catch {
       return existing;
     }
-    if (hasDoubleStab(extra)) return existing;
+    normalizeDoubleStab(extra);
     recordFromAction(wizard.leftHand, extra.left, extra);
     recordFromAction(wizard.rightHand, extra.right, extra);
     return [...existing, ...detectCasts(wizard, leftChoice, rightChoice)];
@@ -1154,7 +1257,7 @@ export function snapshot(room) {
     },
     monsters: (s.monsters || []).map(monsterJson),
     monsterColumns: s.monsterColumns || [],
-    rules: { allowCharmNothing: s.rules.allowCharmNothing },
+    rules: { allowCharmNothing: !!s.rules?.allowCharmNothing },
     joined: {
       a: !!(room.joined && room.joined.a),
       b: !!(room.joined && room.joined.b),
@@ -1352,8 +1455,11 @@ export function isSameOrigin(request) {
   }
 }
 
+/** Stati che per specifica Fetch non possono avere corpo (Response lancia). */
+const NULL_BODY_STATUS = new Set([101, 204, 205, 304]);
+
 export function jsonResponse(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data), {
+  return new Response(NULL_BODY_STATUS.has(status) ? null : JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json',

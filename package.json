@@ -10,6 +10,7 @@
     "gestures:optimize": "node scripts/optimize-gestures.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage.enabled --coverage.include='server/shared.js' --coverage.include='server/status.js'",
     "cf:dev": "npm run build:worker && wrangler dev",
     "cf:deploy": "npm run build:worker && wrangler deploy"
   },
@@ -17,6 +18,8 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "jsdom": "^30.0.1",
     "sharp": "^0.35.2",
     "vitest": "^4.1.9",
     "wrangler": "^4.103.0"

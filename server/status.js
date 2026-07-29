@@ -1,8 +1,11 @@
 /**
- * Full turn resolution + enchantment status for Spellcaster.
- * Inlined into the worker by server/build.js (after shared helpers it needs,
- * or before shared if shared imports these — build concatenates resolve then shared with imports stripped).
+ * Stato degli enchantment e vincoli applicati ai gesti prima di registrarli.
+ * Non dipende da server/shared.js: build.js lo inlina *prima* di shared.js
+ * (gli import/export vengono rimossi e i due file concatenati).
  */
+
+/** Danno massimo sopportabile da un mago: al 15° punto muore. */
+export const WIZARD_MAX_DAMAGE = 14;
 
 export const MIND_GROUP = new Set([
   'amnesia',
@@ -46,7 +49,8 @@ export function emptyStatus() {
     confusion: false,
     fear: false,
     charmPerson: null, // { controllerId, hand }
-    paralysis: null, // { hand: 'left'|'right' }
+    paralysis: null, // { hand: 'left'|'right', forced?: HandAction }
+    lastParalyzedHand: null, // 'left'|'right' — la paralisi si ripete sulla stessa mano
     diseaseTurns: 0,
     poisonTurns: 0,
     blindnessTurns: 0,
@@ -68,6 +72,7 @@ export function clearEnchantments(wizard, { keepResists = false } = {}) {
   s.fear = false;
   s.charmPerson = null;
   s.paralysis = null;
+  s.lastParalyzedHand = null;
   s.diseaseTurns = 0;
   s.poisonTurns = 0;
   s.blindnessTurns = 0;
@@ -130,6 +135,20 @@ function cloneHand(h) {
 }
 
 /**
+ * Posizione in cui una mano resta bloccata dalla paralisi.
+ * Regola originale: «if the hand being paralyzed is performing a C, S or W it
+ * is instead paralyzed into F, D or P respectively», il resto resta com’è
+ * (così si possono ripetere le pugnalate).
+ */
+export function paralyzedPosition(action) {
+  const h = cloneHand(action);
+  if (h.kind === 'clap') return { kind: 'gesture', gesture: 'F' };
+  if (h.kind === 'gesture' && h.gesture === 'S') return { kind: 'gesture', gesture: 'D' };
+  if (h.kind === 'gesture' && h.gesture === 'W') return { kind: 'gesture', gesture: 'P' };
+  return h;
+}
+
+/**
  * Rewrite actions under active enchantments before they are recorded.
  * Mutates action in place. Returns notes for the log.
  */
@@ -159,25 +178,30 @@ export function applyPreTurnConstraints(wizard, action, opts = {}) {
             : forced === 'C' || forced === 'c'
               ? { kind: 'clap' }
               : { kind: 'gesture', gesture: String(forced).toUpperCase() };
-      if (hand === 'right') action.right = parsed;
-      else action.left = parsed;
-      notes.push('charm');
+      // Variante Buchanan (default): il controllore non può imporre «nulla».
+      if (parsed.kind === 'nothing' && !opts.allowCharmNothing) {
+        notes.push('charm:rifiutato');
+      } else {
+        if (hand === 'right') action.right = parsed;
+        else action.left = parsed;
+        notes.push('charm');
+      }
     }
     s.charmPerson = null;
   }
 
-  // Paralysis: lock one hand with remapping
+  // Paralysis: la mano resta bloccata nella posizione del turno del lancio
   if (s.paralysis?.hand) {
     const hand = s.paralysis.hand;
     const cur = hand === 'right' ? action.right : action.left;
-    let next = cur;
-    if (cur.kind === 'clap') next = { kind: 'gesture', gesture: 'F' };
-    else if (cur.kind === 'gesture' && cur.gesture === 'S') next = { kind: 'gesture', gesture: 'F' };
-    else if (cur.kind === 'gesture' && cur.gesture === 'W') next = { kind: 'gesture', gesture: 'P' };
+    const next = s.paralysis.forced
+      ? cloneHand(s.paralysis.forced)
+      : paralyzedPosition(cur);
     if (hand === 'right') action.right = next;
     else action.left = next;
     notes.push('paralysis');
     s.paralysis = null;
+    s.lastParalyzedHand = hand;
   }
 
   // Fear: forbid C, D, F, S → convert to nothing
@@ -231,17 +255,20 @@ export function tickEndOfTurn(state) {
     if (s.diseaseTurns > 0 && !permanent.has('disease')) {
       s.diseaseTurns -= 1;
       if (s.diseaseTurns <= 0) {
-        w.damage = 15;
+        w.damage = WIZARD_MAX_DAMAGE + 1;
         deaths.push(w.id);
       }
     }
     if (s.poisonTurns > 0 && !permanent.has('poison')) {
       s.poisonTurns -= 1;
       if (s.poisonTurns <= 0) {
-        w.damage = 15;
+        w.damage = WIZARD_MAX_DAMAGE + 1;
         deaths.push(w.id);
       }
     }
+
+    // La paralisi si ripete sempre sulla stessa mano finché resta attiva
+    if (!s.paralysis) s.lastParalyzedHand = null;
   }
   return deaths;
 }

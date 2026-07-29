@@ -16,8 +16,9 @@ spellcaster/
 ├── server/
 │   ├── worker.template.js  # Worker (API)
 │   ├── shared.js           # Motore regole + room service
-│   ├── shared.test.js
-│   └── build.js            # → dist/worker.js
+│   ├── status.js           # Enchantment e vincoli pre-turno
+│   ├── build.js            # → dist/worker.js
+│   └── *.test.js           # Motore, casi limite, worker compilato
 ├── docs/RULES.md
 ├── Spellcaster.html        # Fonte originale regole
 ├── wrangler.toml
@@ -48,8 +49,20 @@ Apre Wrangler con API + `client/` sullo stesso origin.
 ## Test
 
 ```bash
-npm test
+npm test               # motore + worker compilato + client (jsdom)
+npm run test:coverage  # copertura del motore (shared.js + status.js)
 ```
+
+`worker.template.js` non compare nel report perché viene testato attraverso
+`dist/worker.js`, cioè il file davvero distribuito (il test lo ricompila).
+
+| File | Copre |
+|------|-------|
+| `server/shared.test.js` | Percorsi base del motore e del room service |
+| `server/spells.test.js` | Ogni incantesimo del catalogo e le cancellazioni |
+| `server/engine-edge.test.js` | Casi limite, bersagli mostro, errori, helper HTTP |
+| `server/worker.test.js` | `dist/worker.js` reale con un Durable Object simulato |
+| `client/app.test.js` | Stato del turno, rendering, IA solitaria |
 
 ## Deploy
 

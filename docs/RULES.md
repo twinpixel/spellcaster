@@ -1,7 +1,7 @@
 # Spellcaster (Waving Hands) — Regolamento ufficiale
 
 Documento derivato da [Spellcaster.html](../Spellcaster.html) (Richard Bartle, *Duel Purpose* / Andrew Buchanan).  
-Il motore di gioco in `packages/spellcaster_core` implementa queste regole; le costanti (`wizardMaxDamage`, durate, ecc.) sono in codice.
+Il motore di gioco è in [`server/shared.js`](../server/shared.js) (gesti, catalogo, risoluzione del turno) e [`server/status.js`](../server/status.js) (enchantment e vincoli pre-turno); le costanti (`WIZARD_MAX_DAMAGE`, durate, ecc.) sono in codice.
 
 ---
 
@@ -44,6 +44,7 @@ Due maghi si sfidano in un duello di gesti magici. Ogni mago accumula una sequen
   3. **tutti i gesti di un incantesimo** usano la **stessa mano**.
 - Se un gesto può completare più incantesimi, il lanciatore **sceglie** quale.
 - Gesti simultanei su entrambe le mani: notazione **(x** con lettera minuscola, es. **(w** = W con entrambe le mani.
+- Un **(x** è pur sempre quel gesto *per ciascuna mano*: vale sia per gli incantesimi che richiedono **(x**, sia per i passi a mano singola delle due sequenze in corso.
 - **C** con una sola mano equivale a **nulla** e **interrompe** la sequenza in corso su quella mano.
 - **stab** e **nulla** interrompono la sequenza; non compaiono negli incantesimi.
 
@@ -88,7 +89,7 @@ Protegge il soggetto per **quel turno** da mostri, missili e pugnalate. Uno shie
 Riflette verso il lanciatore gli incantesimi puntati al soggetto **quel turno** (es. missile, lightning). Non riflette mostri già esistenti né pugnalate. Nessun effetto se sul soggetto c’è *Counter-spell* o *Dispel magic*. Due mirror simultanei → un solo mirror.
 
 ### Counter-spell — `W-P-P` **oppure** `W-W-S`
-Annulla qualsiasi altro incantesimo sul soggetto nel turno (non *Dispel magic* né *Finger of death*). Su incantesimi ad area, protegge solo il soggetto. Agisce anche come **Shield** sul gesto finale. Due counter-spell sullo stesso soggetto → effetto come uno solo.
+Annulla qualsiasi altro incantesimo sul soggetto nel turno (non *Dispel magic*, non *Finger of death*, e non *Raise dead* su un cadavere). Su incantesimi ad area (*fire storm*, *ice storm*) **non li annulla**: rende immune solo il proprio soggetto, mago o mostro che sia. Agisce anche come **Shield** sul gesto finale. Due counter-spell sullo stesso soggetto → effetto come uno solo.
 
 ### Dispel magic — `C-D-P-W`
 Come counter-spell + remove enchantment ma **globale**: blocca tutti gli incantesimi del turno (due dispel si combinano), rimuove tutti gli enchantment, distrugge tutti i mostri (attaccano quel turno). Non ferma pugnalate/resa. Shield sul soggetto del dispel.
@@ -97,7 +98,7 @@ Come counter-spell + remove enchantment ma **globale**: blocca tutti gli incante
 Su cadavere recente o mostro morto: torna in vita, danno azzerato, rimuove malattie/veleni/enchantment. Agisce subito (anche combattere nel turno del lancio). Su vivente: come *Cure light wounds* per **5** punti (o meno se danno minore). Non bloccabile da counter-spell su cadavere; sì da dispel magic.
 
 ### Cure light wounds — `D-F-W`
-Cura **1** punto di danno. Non rimosso da dispel/remove.
+Cura **1** punto di danno, **come se quel punto non fosse stato inflitto**: le cure si applicano dopo tutti i danni del turno (chi è a 10 e subisce un *lightning bolt* + una *cure light* chiude il turno a 14, non morto). Non rimosso da dispel/remove; non riporta in vita chi è stato colpito da *Finger of death*.
 
 ### Cure heavy wounds — `D-F-P-W`
 Cura **2** punti (o 1 se ne aveva solo 1). Cura anche **Disease** (non veleno).
@@ -116,7 +117,13 @@ Comportamento comune: il mostro è controllato dal **soggetto** dell’incantesi
 | Summon Giant | W-F-P-S-F-W | 4 / 4 |
 
 ### Summon Elemental — `C-S-W-W-S`
-Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). Deve avere bersaglio vivente. **3** danni/turno a chi non resiste al tipo; **3** HP; ucciso da magia opposta, tempesta opposta, o due elementali opposti si annullano; due uguali si fondono. Non attacca nel turno in cui viene distrutto da magia/tempesta opposta. Non attacca chi ha shield-equivalent o resiste al tipo.
+Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). **3** HP.
+
+- **Non prende ordini**: attacca *chiunque* — maghi (anche il proprio controllore) e mostri — che non resista al suo tipo e non sia protetto da uno shield-equivalent.
+- **3** danni per turno a ciascun bersaglio.
+- Ucciso da magia del tipo opposto (*fireball*, *resist cold*… su un elementale di ghiaccio), che ne viene neutralizzata.
+- Due elementali **opposti** si annullano prima di attaccare; due **uguali** si fondono in uno solo di forza normale.
+- Non attacca nel turno in cui viene distrutto.
 
 ---
 
@@ -130,9 +137,9 @@ Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). De
 | Lightning bolt (corto) | W-D-D-C | 5 danno; **una volta per mago per battaglia** |
 | Cause light wounds | W-F-P | 2 danno; cure light riduce a 1; no shield |
 | Cause heavy wounds | W-P-F-D | 3 danno |
-| Fireball | F-S-S-D-D | 5 se non resiste al fuoco; vs ice storm sul soggetto: neutro; distrugge ice elemental |
-| Fire storm | S-W-W-C | 5 a tutti non resistenti al calore; annulla con ice storm/ice elemental |
-| Ice storm | W-S-S-C | 5 a tutti non resistenti al freddo; annulla con fire storm/fire elemental; fireball locale si annulla |
+| Fireball | F-S-S-D-D | 5 se non resiste al fuoco; con una *ice storm* simultanea il **soggetto del fireball** non subisce né l’uno né l’altra (la tempesta colpisce comunque tutti gli altri); distrugge un ice elemental |
+| Fire storm | S-W-W-C | 5 a tutto ciò che non resiste al calore (maghi e mostri); **annullata** da *ice storm* o da un ice elemental (che però muore); distrugge anche i fire elemental senza esserne annullata; due fire storm valgono come una |
+| Ice storm | W-S-S-C | Simmetrica alla fire storm per il freddo |
 
 ---
 
@@ -143,10 +150,10 @@ Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). De
 | Incantesimo | Gesti | Effetto |
 |-------------|-------|---------|
 | Amnesia | D-P-P | Mago ripete **identici** gesti turno successivo (inclusi stab) |
-| Confusion | D-S-F | Mago: dopo rivelazione, 2 dadi sostituiscono un gesto (1-3 mano sx, 4-6 dx; 1=C…6=W). Mostro: attacco casuale |
+| Confusion | D-S-F | Mago: dopo rivelazione, 2 dadi sostituiscono un gesto (1-3 mano sx, 4-6 dx; 1=C…6=W). Mostro: attacco casuale **già nel turno del lancio** |
 | Charm person | P-S-D-F | Umano: turno dopo, controllore sceglie gesto di una mano (**default: non può imporre nulla**; solo F/P/S/W/D o stab) |
 | Charm monster | P-S-D-D | Mostro (non elementale): controllo al lanciatore da questo turno |
-| Paralysis | F-F-F | Mago: una mano bloccata turno dopo (C→F, S→F, W→P per paralisi); mostro: non attacca turno dopo |
+| Paralysis | F-F-F | Mago: il turno dopo la mano scelta resta **nella posizione tenuta nel turno del lancio** (C→**F**, S→**D**, W→**P**, il resto invariato, così si possono ripetere le pugnalate); se una mano è già paralizzata dev’essere ancora quella. Mostro: non attacca il turno dopo |
 | Fear | S-W-D | Turno dopo: no C, D, F, S (solo maghi) |
 | Anti-spell | S-P-F | Turno dopo: non può usare gesti di questo turno o precedenti nelle sequenze |
 | Protection from evil | W-W-P | Shield-equivalent per **questo turno + 3 successivi** |
@@ -169,7 +176,8 @@ Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). De
 P-P simultaneo con entrambe le mani. Perdi salvo uccisione simultanea dell’avversario.
 
 ### Stab
-1 danno a mostro o mago; bloccato da shield/protection; un solo stab per turno; non riflesso da mirror; non fermato da dispel (ma shield sì).
+1 danno a mostro o mago; bloccato da shield/protection; non riflesso da mirror; non fermato da dispel (ma shield sì).
+**Un solo pugnale per mago**: se si indica `stab` su entrambe le mani, la seconda decade a «nulla» (entrambe interrompono comunque la sequenza).
 
 ---
 
@@ -190,6 +198,11 @@ P                Shield
 
 ## Note implementative (codice)
 
-- Pattern in `SpellCatalog` / test in `packages/spellcaster_core/test/spells/`.
-- Regenerare test: `dart run tools/generate_spell_tests.dart` dalla cartella core.
-- **Charm person / nulla:** default `allowCharmNothing: false` (variante Brian Buchanan). Per la regola stampata con nulla ammesso: `POST /games` con `{ "allowCharmNothing": true }`; validazione gesto forzato nel turno con campo `charmForced` (es. `"F"`, `"stab"`, `" "` solo se consentito).
+- Pattern degli incantesimi: `SPELL_PATTERNS` in [`server/shared.js`](../server/shared.js); nomi e sezioni in `SPELL_META`.
+- Test: `npm test` (motore, worker compilato e client). Copertura: `npm run test:coverage`.
+- **Charm person / nulla:** default `allowCharmNothing: false` (variante Brian Buchanan). Per la regola stampata con nulla ammesso: `POST /games` con `{ "allowCharmNothing": true }`; il gesto imposto viaggia nel turno del controllore con il campo `charmForced` (es. `"F"`, `"stab"`, `" "` solo se consentito — altrimenti il server lo ignora e la vittima mantiene il gesto scritto).
+
+### Semplificazioni note
+
+- Il gesto imposto dal *charm* e la mano scelta da *charm person* / *paralysis* usano il default `left` se il client non li specifica.
+- Il *dispel magic* rimuove gli enchantment nello stesso momento in cui gli altri effetti del turno si applicano (come da regola «the enchantment is removed as the fireball explodes»).

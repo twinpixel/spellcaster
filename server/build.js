@@ -19,6 +19,8 @@ const OUTPUT_PATH = path.join(ROOT, 'dist', 'worker.js');
 function stripModuleSyntax(source) {
   return source
     .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
+    // `export { A, B };` / `export { A } from '…';` → già inlinati, si rimuovono
+    .replace(/^export\s*\{[^}]*\}\s*(?:from\s+['"][^'"]+['"])?;?\s*$/gm, '')
     .replace(/^export\s+/gm, '')
     .trim();
 }
@@ -57,7 +59,7 @@ async function syncSpellVideos() {
   }
   await fs.cp(src, dest, { recursive: true });
   const entries = await fs.readdir(dest);
-  return entries.filter((n) => !n.startsWith('.')).length;
+  return entries.filter((n) => /\.(mp4|webm|mov)$/i.test(n)).length;
 }
 
 async function main() {
