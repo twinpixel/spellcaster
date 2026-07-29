@@ -498,6 +498,7 @@ async function createGame({ solo = false, wizard = null } = {}) {
       });
     } else {
       state.aiWizard = null;
+      ensureAiBook();
     }
     state.game = game;
     state.playerId = 'a';
@@ -538,6 +539,7 @@ async function joinGame(gameId) {
     state.game = game;
     state.playerId = 'b';
     state.solo = false;
+    ensureAiBook();
     state.left = null;
     state.right = null;
     state.waitingSubmit = false;
@@ -576,6 +578,7 @@ async function resumeSession() {
       ensureAiBook();
     }
     state.view = 'duel';
+    ensureAiBook();
     state.waitingSubmit = iAmWaiting();
     state.lastSpellVideoKey = castsVideoKey(game);
     syncPoll();
@@ -1343,6 +1346,41 @@ function SPELL_META_NAME(id) {
   return map[id] || id;
 }
 
+/**
+ * Incantesimi che cambiano davvero effetto se rimirati su un’altra creatura.
+ * Fuori restano quelli il cui bersaglio naturale è già quello giusto: shield,
+ * protezioni, cure, evocazioni, tempeste e gli enchantment sul mago avversario.
+ */
+const RETARGETABLE_SPELLS = new Set([
+  'missile', 'fingerOfDeath', 'lightningBoltLong', 'lightningBoltShort',
+  'causeLightWounds', 'causeHeavyWounds', 'fireball',
+  'removeEnchantment', 'counterSpell', 'raiseDead',
+  'resistHeat', 'resistCold',
+  'charmMonster', 'paralysis', 'confusion', 'amnesia', 'blindness', 'invisibility',
+]);
+
+/**
+ * Quali incantesimi si completerebbero giocando i gesti scelti, per quella mano.
+ * Usa la stessa lettura delle sequenze del cervello IA: se il catalogo non è
+ * ancora arrivato restituisce nulla, e valgono i bersagli di default del server.
+ */
+function spellsCompletedBy(handKey) {
+  const book = state.aiBook;
+  if (!book?.length || !state.game) return [];
+  const code = state[handKey];
+  const other = handKey === 'left' ? state.right : state.left;
+  if (code == null) return [];
+  const symbol = aiSymbolFor(code, other);
+  if (!symbol) return [];
+  const buffers = aiHandBuffers(state.game, state.playerId);
+  const buffer = [...(handKey === 'left' ? buffers.left : buffers.right), symbol];
+  const out = [];
+  for (const spell of book) {
+    if (spell.patterns.some((pattern) => aiMatchesSuffix(buffer, pattern))) out.push(spell.id);
+  }
+  return out;
+}
+
 /** Domande da fare prima di inviare il turno (solo se servono). */
 function collectTurnPrompts() {
   ensureDefaultTargets();
@@ -1404,21 +1442,23 @@ function collectTurnPrompts() {
     }
   }
 
-  // Bersaglio esplicito di un incantesimo: ha senso solo con creature in campo
+  // Bersaglio esplicito: solo se un incantesimo si completa davvero E se per
+  // quell'incantesimo cambiare bersaglio ha senso. Uno «shield» protegge chi lo
+  // lancia: chiederlo ogni volta sarebbe solo rumore.
   const allTargets = targetOptions();
   if (allTargets.length > 2) {
     const withAuto = [{ id: 'auto', label: 'Automatico' }, ...allTargets];
     const hands = [
-      ['left', 'spellLeft', 'spell-target-left', 'Bersaglio incantesimo SX', state.spellTargetLeftExplicit, state.spellTargetLeft],
-      ['right', 'spellRight', 'spell-target-right', 'Bersaglio incantesimo DX', state.spellTargetRightExplicit, state.spellTargetRight],
+      ['left', 'spellLeft', 'spell-target-left', 'SX', state.spellTargetLeftExplicit, state.spellTargetLeft],
+      ['right', 'spellRight', 'spell-target-right', 'DX', state.spellTargetRightExplicit, state.spellTargetRight],
     ];
-    for (const [handKey, kind, id, label, explicit, value] of hands) {
-      const code = state[handKey];
-      if (code == null || code === ' ' || code === 'stab') continue;
+    for (const [handKey, kind, id, side, explicit, value] of hands) {
+      const casts = spellsCompletedBy(handKey).filter((x) => RETARGETABLE_SPELLS.has(x));
+      if (!casts.length) continue;
       prompts.push({
         kind,
         id,
-        label,
+        label: `Bersaglio di ${casts.map(SPELL_META_NAME).join(' / ')} (${side})`,
         type: 'select',
         value: explicit ? value : 'auto',
         opts: withAuto,

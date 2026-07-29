@@ -60,6 +60,8 @@ const EXPORTS = [
   'aiHandBuffers',
   'aiRemaining',
   'aiIncomingThreats',
+  'spellsCompletedBy',
+  'RETARGETABLE_SPELLS',
   'chooseAiTurn',
   'AI_STYLES',
   'aiStyleWeight',
@@ -308,15 +310,67 @@ describe('domande prima dell’invio', () => {
     expect(app.state.stabTarget).toBe('b');
   });
 
-  it('con creature in campo chiede ordini, stab e bersaglio incantesimo', () => {
+  it('con creature in campo chiede dove va lo stab', () => {
     app.state.game = withGoblin();
     app.state.playerId = 'b'; // il goblin è di A: per B è un bersaglio in più
     app.state.left = 'stab';
     app.state.right = 'W';
     const kinds = app.collectTurnPrompts().map((p) => p.kind);
     expect(kinds).toContain('stab');
-    expect(kinds).toContain('spellRight');
-    expect(kinds).not.toContain('spellLeft'); // la mano che pugnala non lancia
+  });
+
+  it('non chiede il bersaglio se non si completa nessun incantesimo', () => {
+    app.state.game = withGoblin();
+    app.state.aiBook = app.buildSpellBook(spellListJson());
+    app.state.playerId = 'b';
+    app.state.left = 'W'; // primo gesto, niente si completa
+    app.state.right = ' ';
+    const kinds = app.collectTurnPrompts().map((p) => p.kind);
+    expect(kinds).not.toContain('spellLeft');
+    expect(kinds).not.toContain('spellRight');
+  });
+
+  it('non chiede il bersaglio per uno shield: protegge chi lo lancia', () => {
+    // regressione: chiedeva «Bersaglio incantesimo» a ogni gesto con creature in campo
+    app.state.game = withGoblin();
+    app.state.aiBook = app.buildSpellBook(spellListJson());
+    app.state.playerId = 'b';
+    app.state.left = 'P'; // P completa subito uno shield
+    app.state.right = ' ';
+    expect(app.spellsCompletedBy('left')).toContain('shield');
+    expect(app.collectTurnPrompts().map((p) => p.kind)).not.toContain('spellLeft');
+  });
+
+  it('chiede il bersaglio quando l’incantesimo può colpire una creatura', () => {
+    // B prepara un missile (S poi D): con un goblin in campo la scelta conta
+    const svc = createGameService();
+    const snap = svc.createGame({ nameA: 'Alpha', nameB: 'Beta' });
+    svc.joinGame(snap.id, 'b', 'Beta');
+    for (const g of ['S', 'F', 'W']) { // A evoca un goblin
+      svc.submitTurn(snap.id, { playerId: 'a', left: g, right: ' ' });
+      svc.submitTurn(snap.id, { playerId: 'b', left: 'S', right: ' ' });
+    }
+    app.state.game = svc.getGame(snap.id);
+    app.state.aiBook = app.buildSpellBook(spellListJson());
+    app.state.playerId = 'b';
+    app.state.left = 'D'; // S-D = missile
+    app.state.right = ' ';
+
+    expect(app.spellsCompletedBy('left')).toContain('missile');
+    const p = app.collectTurnPrompts().find((x) => x.kind === 'spellLeft');
+    expect(p).toBeTruthy();
+    expect(p.label).toContain('Missile');
+    expect(p.opts.map((o) => o.id)).toContain('m1'); // si può mirare al goblin
+  });
+
+  it('RETARGETABLE_SPELLS esclude ciò che ha già il bersaglio giusto', () => {
+    for (const s of ['shield', 'protectionFromEvil', 'cureLightWounds', 'cureHeavyWounds',
+      'summonGoblin', 'summonOgre', 'fireStorm', 'iceStorm', 'haste', 'timeStop']) {
+      expect(app.RETARGETABLE_SPELLS.has(s)).toBe(false);
+    }
+    for (const s of ['missile', 'fireball', 'fingerOfDeath', 'charmMonster', 'paralysis']) {
+      expect(app.RETARGETABLE_SPELLS.has(s)).toBe(true);
+    }
   });
 
   it('chiede dove attacca la propria creatura solo se ci sono più bersagli', () => {

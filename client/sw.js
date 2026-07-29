@@ -6,7 +6,7 @@
  * NB: CACHE_VERSION è generato AUTOMATICAMENTE dal build (server/build.js).
  * ========================================================================= */
 
-const CACHE_VERSION = 'v-775758c3bd';
+const CACHE_VERSION = 'v-625bf81038';
 const CACHE = `spellcaster-${CACHE_VERSION}`;
 
 const PRECACHE = [
