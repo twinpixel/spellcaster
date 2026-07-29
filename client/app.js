@@ -56,9 +56,9 @@ const NICK_KEY = 'spellcaster.nickname';
 const SPELL_VIDEO_KEY = 'spellcaster.spellVideos';
 
 const AUTHOR_NAME = 'Andrea Poltronieri';
-const AUTHOR_URL = 'https://www.nadreapoltronieri.name';
+const AUTHOR_URL = 'https://www.andreapoltronieri.name';
 /** Testo mostrato per il link (senza schema, come lo si scrive a voce). */
-const AUTHOR_URL_LABEL = 'www.nadreapoltronieri.name';
+const AUTHOR_URL_LABEL = 'www.andreapoltronieri.name';
 
 /** Titoli come in docs/SPELL_VIDEO_PROMPTS.md (slug = lower + spazi→trattini). */
 const SPELL_VIDEO_TITLE = {

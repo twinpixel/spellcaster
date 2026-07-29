@@ -510,6 +510,12 @@ describe('dialog informazioni', () => {
     }
   });
 
+  it('autore e dominio sono quelli giusti', () => {
+    expect(app.AUTHOR_NAME).toBe('Andrea Poltronieri');
+    expect(app.AUTHOR_URL).toBe('https://www.andreapoltronieri.name');
+    expect(app.AUTHOR_URL_LABEL).toBe('www.andreapoltronieri.name');
+  });
+
   it('mostra autore e link cliccabile', () => {
     app.state.view = 'welcome';
     app.render();
