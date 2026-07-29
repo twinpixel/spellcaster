@@ -46,6 +46,11 @@ const EXPORTS = [
   'SPELL_META_NAME',
   'setNickname',
   'getNickname',
+  'showInfoModal',
+  'statusBadges',
+  'AUTHOR_NAME',
+  'AUTHOR_URL',
+  'AUTHOR_URL_LABEL',
 ];
 
 /** Carica app.js in un contesto isolato e ne espone gli interni. */
@@ -465,6 +470,19 @@ describe('rendering', () => {
     expect([...holder.querySelectorAll('button')].some((b) => b.disabled)).toBe(false);
   });
 
+  it('gli effetti in arrivo si distinguono da quelli attivi', () => {
+    const badges = (st) => {
+      const holder = document.createElement('div');
+      holder.innerHTML = app.statusBadges(st);
+      return [...holder.querySelectorAll('.sbadge')].map((b) => b.textContent);
+    };
+    expect(badges({ blindnessQueued: 3 })).toEqual(['Blind 3→']);
+    expect(badges({ blindnessTurns: 2, blindnessQueued: 3 })).toEqual(['Blind 2']);
+    expect(badges({ invisibilityQueued: 3 })).toEqual(['Invis 3→']);
+    expect(badges({ hasteQueued: 3 })).toEqual(['Haste 3→']);
+    expect(badges({})).toEqual([]);
+  });
+
   it('la vista incantesimi raggruppa per sezione', () => {
     app.state.view = 'spells';
     app.state.spells = [
@@ -474,6 +492,61 @@ describe('rendering', () => {
     app.render();
     const titles = [...document.querySelectorAll('.spell-section')].map((e) => e.textContent);
     expect(titles).toEqual(['Protezione', 'Danno']);
+  });
+});
+
+// --- dialog informazioni ---------------------------------------------------
+
+describe('dialog informazioni', () => {
+  it('il pulsante ⓘ è sempre nella barra in alto', () => {
+    for (const view of ['welcome', 'nick', 'duel', 'spells']) {
+      app.state.view = view;
+      if (view === 'duel') {
+        app.state.game = snapshotAfter();
+        app.state.playerId = 'a';
+      }
+      app.render();
+      expect(document.getElementById('btn-info')).toBeTruthy();
+    }
+  });
+
+  it('mostra autore e link cliccabile', () => {
+    app.state.view = 'welcome';
+    app.render();
+    document.getElementById('btn-info').click();
+
+    const modal = document.getElementById('info-modal');
+    expect(modal).toBeTruthy();
+    expect(modal.textContent).toContain('Sviluppato da');
+    expect(modal.textContent).toContain(app.AUTHOR_NAME);
+
+    const link = document.getElementById('info-author-link');
+    expect(link.getAttribute('href')).toBe(app.AUTHOR_URL);
+    expect(link.textContent).toBe(app.AUTHOR_URL_LABEL);
+    // apertura sicura in una nuova scheda
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('cita l’origine del regolamento', () => {
+    app.showInfoModal();
+    expect(document.getElementById('info-modal').textContent).toContain('Richard Bartle');
+  });
+
+  it('si chiude con il pulsante e toccando lo sfondo', () => {
+    app.showInfoModal();
+    document.getElementById('info-close').click();
+    expect(document.getElementById('info-modal')).toBe(null);
+
+    const wrap = app.showInfoModal();
+    wrap.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.getElementById('info-modal')).toBe(null);
+  });
+
+  it('non resta aperto in doppia copia', () => {
+    app.showInfoModal();
+    app.showInfoModal();
+    expect(document.querySelectorAll('#info-modal')).toHaveLength(1);
   });
 });
 

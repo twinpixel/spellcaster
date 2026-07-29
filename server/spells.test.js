@@ -780,13 +780,33 @@ describe('enchantments', () => {
     expect(state.wizardA.damage).toBe(15);
   });
 
-  it('blindness / invisibility su mago; blindness distrugge mostro', () => {
-    let { state } = castInstant('blindness');
-    expect(state.wizardB.status.blindnessTurns).toBeGreaterThan(0);
+  it('blindness e invisibility partono dal turno dopo e durano 3 turni', () => {
+    // «For the next 3 turns not including the one in which the spell was cast»
+    const { state } = castInstant('blindness');
+    expect(state.wizardB.status.blindnessTurns).toBe(0);
+    expect(state.wizardB.status.blindnessQueued).toBe(3);
 
-    ({ state } = castInstant('invisibility', { targetId: 'a' }));
-    expect(state.wizardA.status.invisibilityTurns).toBeGreaterThan(0);
+    // «cieco in questo turno» = contatore attivo o in arrivo prima di giocarlo
+    const blindDuringTurn = [];
+    for (let i = 0; i < 4; i++) {
+      const s = state.wizardB.status;
+      blindDuringTurn.push(s.blindnessTurns > 0 || s.blindnessQueued > 0);
+      state.wizardA.status.antiSpellNextTurn = false;
+      state.wizardB.status.antiSpellNextTurn = false;
+      playTurn(state, parseTurn(' ', ' '), parseTurn(' ', ' '));
+    }
+    expect(blindDuringTurn).toEqual([true, true, true, false]);
 
+    const inv = castInstant('invisibility', { targetId: 'a' }).state;
+    expect(inv.wizardA.status.invisibilityTurns).toBe(0);
+    expect(inv.wizardA.status.invisibilityQueued).toBe(3);
+    playTurn(inv, parseTurn(' ', ' '), parseTurn(' ', ' '));
+    // il primo turno di invisibilità è appena stato giocato: ne restano 2
+    expect(inv.wizardA.status.invisibilityQueued).toBe(0);
+    expect(inv.wizardA.status.invisibilityTurns).toBe(2);
+  });
+
+  it('blindness distrugge un mostro', () => {
     const st = newGame();
     st.wizardA.status.antiSpellNextTurn = false;
     st.wizardB.status.antiSpellNextTurn = false;

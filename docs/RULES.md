@@ -54,6 +54,20 @@ Due maghi si sfidano in un duello di gesti magici. Ogni mago accumula una sequen
 - Bersaglio non standard va dichiarato con i gesti.
 - Bersaglio inesistente al momento del lancio → incantesimo perso.
 
+### Ordine di risoluzione
+
+Tutto è simultaneo, ma alcuni esempi del regolamento fissano una sequenza precisa:
+
+1. **Enchantment e protezioni** (*resist heat*, *shield*, *fear*, …)
+2. **Remove enchantment / Dispel magic** — tolgono anche gli enchantment applicati in questo stesso turno
+3. **Evocazioni** — così un incantesimo può bersagliare «l’elementale che sta per creare»
+4. **Danni** (*missile*, *fireball*, *lightning*, …)
+5. **Tempeste**
+6. **Attacchi dei mostri**
+7. **Pugnalate**, poi le **cure**
+
+Ne discendono i due casi citati dall’originale: *resist heat* + *fireball* simultanei **salvano** la vittima; *remove enchantment* + *fireball* su chi già resisteva la **friggono**.
+
 ### Cancellazioni simultanee
 
 - Esempi: *Finger of death* vs *Raise dead* sullo stesso soggetto; calore vs freddo; incantesimi in contraddizione (*Amnesia* + *Confusion*, ecc.).
@@ -81,9 +95,9 @@ Il arbitro lancia su ogni mago **Dispel magic** poi **Anti-spell**, così nessun
 Protegge il soggetto per **quel turno** da mostri, missili e pugnalate. Uno shield copre tutti gli attacchi di quel tipo nel turno.
 
 ### Remove enchantment — `P-D-W-P`
-- Termina **tutti** gli incantesimi della sezione *Enchantments* sul soggetto (anche quelli lanciati nello stesso turno, salvo effetti già applicati nel turno).
+- Termina **tutti** gli incantesimi della sezione *Enchantments* sul soggetto, **compresi quelli lanciati nello stesso turno**.
 - Distrugge un mostro bersaglio (può attaccare quel turno).
-- Su mago che crea un mostro nel turno: distrugge il mostro appena creato.
+- Su un mago che crea un mostro nel turno: distrugge il mostro appena creato (che attacca comunque).
 
 ### Magic mirror — `C-(w`
 Riflette verso il lanciatore gli incantesimi puntati al soggetto **quel turno** (es. missile, lightning). Non riflette mostri già esistenti né pugnalate. Nessun effetto se sul soggetto c’è *Counter-spell* o *Dispel magic*. Due mirror simultanei → un solo mirror.
@@ -107,7 +121,7 @@ Cura **2** punti (o 1 se ne aveva solo 1). Cura anche **Disease** (non veleno).
 
 ## Incantesimi — Evocazioni (Summons)
 
-Comportamento comune: il mostro è controllato dal **soggetto** dell’incantesimo (o dal controllore del mostro se bersaglio è un mostro). Attacca subito; bersaglio dichiarato con i gesti. Non si può evocare su un elementale; bersaglio inesistente → nessun effetto.
+Comportamento comune: il mostro è controllato dal **soggetto** dell’incantesimo — se il bersaglio è un mostro, dal **controllore di quel mostro**. Attacca subito; bersaglio dichiarato con i gesti. **Non si può evocare su un elementale** e un **bersaglio inesistente** fa perdere l’incantesimo.
 
 | Incantesimo | Gesti | Danno inflitto / subito per uccidere |
 |-------------|-------|--------------------------------------|
@@ -149,11 +163,11 @@ Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). **
 
 | Incantesimo | Gesti | Effetto |
 |-------------|-------|---------|
-| Amnesia | D-P-P | Mago ripete **identici** gesti turno successivo (inclusi stab) |
+| Amnesia | D-P-P | Mago: ripete **identici** i gesti del turno successivo (inclusi stab). Mostro: riattacca **lo stesso bersaglio** del turno in corso |
 | Confusion | D-S-F | Mago: dopo rivelazione, 2 dadi sostituiscono un gesto (1-3 mano sx, 4-6 dx; 1=C…6=W). Mostro: attacco casuale **già nel turno del lancio** |
 | Charm person | P-S-D-F | Umano: turno dopo, controllore sceglie gesto di una mano (**default: non può imporre nulla**; solo F/P/S/W/D o stab) |
 | Charm monster | P-S-D-D | Mostro (non elementale): controllo al lanciatore da questo turno |
-| Paralysis | F-F-F | Mago: il turno dopo la mano scelta resta **nella posizione tenuta nel turno del lancio** (C→**F**, S→**D**, W→**P**, il resto invariato, così si possono ripetere le pugnalate); se una mano è già paralizzata dev’essere ancora quella. Mostro: non attacca il turno dopo |
+| Paralysis | F-F-F | Mago: il turno dopo la mano scelta resta **nella posizione tenuta nel turno del lancio** (C→**F**, S→**D**, W→**P**, il resto invariato, così si possono ripetere le pugnalate); se una mano è già paralizzata dev’essere ancora quella. Mostro: non attacca il turno dopo (**gli elementali sono immuni**) |
 | Fear | S-W-D | Turno dopo: no C, D, F, S (solo maghi) |
 | Anti-spell | S-P-F | Turno dopo: non può usare gesti di questo turno o precedenti nelle sequenze |
 | Protection from evil | W-W-P | Shield-equivalent per **questo turno + 3 successivi** |
@@ -161,11 +175,11 @@ Fuoco o ghiaccio (scelta del **soggetto** dopo aver visto i gesti del turno). **
 | Resist cold | S-S-F-P | Come resist heat per freddo |
 | Disease | D-S-F-F-F-C | Muore dopo **6** turni; cura: remove, cure heavy, dispel |
 | Poison | D-W-W-F-W-D | Come disease ma **cure heavy non cura** |
-| Blindness | D-W-F-F-(d | 3 turni senza vedere gesti avversario; mostri accecati distrutti |
-| Invisibility | P-P-(w-(s | 3 turni invisibile a avversario e suoi mostri; incantesimi visibili; mostro invisibile distrutto |
+| Blindness | D-W-F-F-(d | 3 turni **a partire dal turno dopo** il lancio, senza vedere i gesti avversari; mostri accecati distrutti |
+| Invisibility | P-P-(w-(s | 3 turni **a partire dal turno dopo**, invisibile all’avversario e ai suoi mostri; incantesimi visibili; mostro invisibile distrutto |
 | Haste | P-W-P-W-W-C | 3 turni: doppia coppia di gesti dal turno dopo |
-| Time stop | S-P-P-C | Turno extra immediato nascosto; nessuna resistenza per altri |
-| Delayed effect | D-W-S-S-S-P | Prossimo incantesimo completato (entro 3 turni) «in banca» fino a scelta |
+| Time stop | S-P-P-C | Turno extra immediato e nascosto; nel turno extra **gli altri non hanno né resistenze né scudi** |
+| Delayed effect | D-W-S-S-S-P | Prossimo incantesimo completato — **anche nello stesso turno** o entro i 3 successivi — «in banca» fino a scelta; uno solo alla volta |
 | Permanency | S-P-F-P-S-D-W | Prossimo enchantment idoneo (entro 3 turni) diventa permanente (esclusi anti-spell, disease, poison, time stop) |
 
 ---

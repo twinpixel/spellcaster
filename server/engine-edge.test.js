@@ -404,6 +404,120 @@ describe('fireball e tempeste sui mostri', () => {
   });
 });
 
+// --- ordine di risoluzione -------------------------------------------------
+
+describe('ordine di risoluzione (esempi del regolamento)', () => {
+  it('resist heat simultaneo a un fireball salva la vittima', () => {
+    // «if he were … hit by a 'resist fire' and 'fireball' at once then he would
+    //  start to resist fire as the fireball exploded and thus be saved»
+    const st = freshState();
+    preload(st.wizardA, SPELL_PATTERNS.fireball[0]);
+    preload(st.wizardB, SPELL_PATTERNS.resistHeat[0]);
+    playTurn(st, parseTurn('D', ' '), parseTurn('P', ' '), {
+      leftChoiceA: 'fireball',
+      leftChoiceB: 'resistHeat',
+      spellTargetB: { left: 'b' },
+    });
+    expect(st.wizardB.status.resistHeat).toBe(true);
+    expect(st.wizardB.damage).toBe(0);
+  });
+
+  it('remove enchantment toglie la resistenza in tempo per il fireball', () => {
+    // «the enchantment is removed as the fireball explodes hence the poor
+    //  victim is fried»
+    const st = freshState();
+    st.wizardB.status.resistHeat = true;
+    preload(st.wizardA, SPELL_PATTERNS.fireball[0]);
+    st.wizardA.rightHand.symbols = [
+      { t: 'single', g: 'P' }, { t: 'single', g: 'D' }, { t: 'single', g: 'W' },
+    ];
+    playTurn(st, parseTurn('D', 'P'), parseTurn(' ', ' '), {
+      leftChoiceA: 'fireball',
+      rightChoiceA: 'removeEnchantment',
+      spellTargetA: { left: 'b', right: 'b' },
+    });
+    expect(st.wizardB.status.resistHeat).toBe(false);
+    expect(st.wizardB.damage).toBe(5);
+  });
+
+  it('remove enchantment cancella anche un enchantment lanciato nello stesso turno', () => {
+    const st = freshState();
+    preload(st.wizardA, SPELL_PATTERNS.removeEnchantment[0]);
+    preload(st.wizardB, SPELL_PATTERNS.fear[0]);
+    playTurn(st, parseTurn('P', ' '), parseTurn('D', ' '), {
+      leftChoiceA: 'removeEnchantment',
+      leftChoiceB: 'fear',
+      spellTargetA: { left: 'a' },
+      spellTargetB: { left: 'a' },
+    });
+    expect(st.wizardA.status.fear).toBe(false);
+  });
+
+  it('remove enchantment su un mago distrugge il mostro che sta creando', () => {
+    // «unless cast on a wizard as he creates a monster»
+    const st = freshState();
+    preload(st.wizardA, SPELL_PATTERNS.removeEnchantment[0]);
+    preload(st.wizardB, SPELL_PATTERNS.summonGoblin[0]);
+    const res = playTurn(st, parseTurn('P', ' '), parseTurn('W', ' '), {
+      leftChoiceA: 'removeEnchantment',
+      leftChoiceB: 'summonGoblin',
+      spellTargetA: { left: 'b' },
+    });
+    const goblin = st.monsters.find((m) => m.type === 'goblin');
+    expect(goblin).toBeTruthy();
+    expect(goblin.alive).toBe(false);
+    // ma ha comunque attaccato in quel turno
+    expect(st.wizardA.damage).toBe(1);
+    expect(res.monsterLog[goblin.id].text).toContain('☠');
+  });
+
+  it('un fireball può colpire l’elementale creato nello stesso turno', () => {
+    // «The target need not exist, for example "the elemental he's about to create"»
+    const st = freshState();
+    preload(st.wizardA, SPELL_PATTERNS.fireball[0]);
+    preload(st.wizardB, SPELL_PATTERNS.summonElemental[0]);
+    playTurn(st, parseTurn('D', ' '), parseTurn('S', ' '), {
+      leftChoiceA: 'fireball',
+      leftChoiceB: 'summonElemental',
+      elementalTypeB: 'ice',
+      spellTargetA: { left: 'm1' },
+    });
+    expect(st.monsters.find((m) => m.id === 'm1').alive).toBe(false);
+  });
+});
+
+// --- evocazioni: bersagli validi ------------------------------------------
+
+describe('bersagli delle evocazioni', () => {
+  it('non si può evocare su un elementale', () => {
+    const st = freshState();
+    castA(st, 'summonElemental', { choices: { elementalTypeA: 'fire' } });
+    const elem = st.monsters[0];
+    const before = st.monsters.length;
+    castA(st, 'summonGoblin', { targetId: elem.id });
+    expect(st.monsters).toHaveLength(before);
+  });
+
+  it('un’evocazione su un bersaglio inesistente si perde', () => {
+    const st = freshState();
+    castA(st, 'summonGoblin', { targetId: 'm42' });
+    expect(st.monsters).toHaveLength(0);
+  });
+
+  it('evocare su un mostro dà il controllo al *suo* controllore', () => {
+    const st = freshState();
+    const goblin = summonGoblin(st); // controllato da A
+    unlock(st);
+    preload(st.wizardB, SPELL_PATTERNS.summonOgre[0]);
+    playTurn(st, parseTurn(' ', ' '), parseTurn('W', ' '), {
+      leftChoiceB: 'summonOgre',
+      spellTargetB: { left: goblin.id },
+    });
+    const ogre = st.monsters.find((m) => m.type === 'ogre');
+    expect(ogre.controllerId).toBe('a');
+  });
+});
+
 // --- cancellazioni combinate ----------------------------------------------
 
 describe('cancellazioni', () => {
@@ -526,9 +640,15 @@ describe('delayed effect e permanency', () => {
     st.wizardA.status.permanencyArmed = 3;
     castA(st, 'blindness');
     expect(st.wizardB.status.permanent).toContain('blindness');
-    const turns = st.wizardB.status.blindnessTurns;
+
     unlock(st);
     playTurn(st, parseTurn(' ', ' '), parseTurn(' ', ' '));
+    const turns = st.wizardB.status.blindnessTurns;
+    expect(turns).toBe(3);
+    for (let i = 0; i < 5; i++) {
+      unlock(st);
+      playTurn(st, parseTurn(' ', ' '), parseTurn(' ', ' '));
+    }
     expect(st.wizardB.status.blindnessTurns).toBe(turns);
   });
 
@@ -606,6 +726,83 @@ describe('haste, time stop e fine partita', () => {
     snap = submitTurnToRoom(room, { playerId: 'a', left: 'P', right: ' ' });
     expect(snap.extraTurnFor).toBe(null);
     expect(snap.turn).toBe(2);
+  });
+
+  it('nel turno di time stop l’avversario non ha difese', () => {
+    // «All non-affected beings have no resistance to any form of attack»
+    const room = createRoom('ts1');
+    joinRoom(room, 'b', 'Beta');
+    unlock(room.state);
+    room.state.wizardB.status.resistHeat = true;
+    room.state.extraTurnFor = 'a';
+    // A completa un fireball nel turno extra, B è protetto da uno shield attivo
+    room.state.wizardB.status.protectionFromEvilTurns = 3;
+    preload(room.state.wizardA, SPELL_PATTERNS.fireball[0]);
+    const snap = submitTurnToRoom(room, {
+      playerId: 'a', left: 'D', right: ' ', leftSpell: 'fireball',
+    });
+    expect(snap.players.b.damage).toBe(5);
+  });
+
+  it('fuori dal time stop le resistenze funzionano normalmente', () => {
+    const room = createRoom('ts2');
+    joinRoom(room, 'b', 'Beta');
+    unlock(room.state);
+    room.state.wizardB.status.resistHeat = true;
+    preload(room.state.wizardA, SPELL_PATTERNS.fireball[0]);
+    submitTurnToRoom(room, { playerId: 'a', left: 'D', right: ' ', leftSpell: 'fireball' });
+    const snap = submitTurnToRoom(room, { playerId: 'b', left: ' ', right: ' ' });
+    expect(snap.players.b.damage).toBe(0);
+  });
+
+  it('amnesia su un mostro gli fa ripetere il bersaglio', () => {
+    const st = freshState();
+    const mine = summonGoblin(st); // ha attaccato B
+    expect(mine.lastTargetId).toBe('b');
+
+    // A ordina al goblin di colpire sé stesso, ma l’amnesia lo rimanda su B
+    unlock(st);
+    preload(st.wizardB, SPELL_PATTERNS.amnesia[0]);
+    const dmgA = st.wizardA.damage;
+    const dmgB = st.wizardB.damage;
+    playTurn(st, parseTurn(' ', ' '), parseTurn('P', ' '), {
+      leftChoiceB: 'amnesia',
+      spellTargetB: { left: mine.id },
+      monsterOrdersA: [{ monsterId: mine.id, targetId: 'a' }],
+    });
+    expect(st.wizardA.damage).toBe(dmgA);
+    expect(st.wizardB.damage).toBe(dmgB + 1);
+  });
+
+  it('la paralisi non ha effetto sugli elementali', () => {
+    const st = freshState();
+    castA(st, 'summonElemental', { choices: { elementalTypeA: 'fire' } });
+    const elem = st.monsters[0];
+    castA(st, 'paralysis', { targetId: elem.id });
+    expect(st.monsters.find((m) => m.id === elem.id).paralyzedPending).toBeFalsy();
+
+    const dmgB = st.wizardB.damage;
+    unlock(st);
+    playTurn(st, parseTurn(' ', ' '), parseTurn(' ', ' '));
+    expect(st.wizardB.damage).toBe(dmgB + 3); // ha attaccato lo stesso
+  });
+
+  it('il delayed effect può bancare un incantesimo dello stesso turno', () => {
+    // «The next spell he completes, provided it is on this turn or one of the next 3»
+    const st = freshState();
+    preload(st.wizardA, SPELL_PATTERNS.delayedEffect[0]);
+    st.wizardA.rightHand.symbols = [{ t: 'single', g: 'S' }];
+    const res = playTurn(st, parseTurn('P', 'D'), parseTurn(' ', ' '), {
+      leftChoiceA: 'delayedEffect',
+      rightChoiceA: 'missile',
+    });
+    expect(res.castsA.some((c) => c.spell === 'missile' && c.banked)).toBe(true);
+    expect(st.wizardA.status.delayedBank.spell).toBe('missile');
+    expect(st.wizardB.damage).toBe(0);
+
+    unlock(st);
+    playTurn(st, parseTurn(' ', ' '), parseTurn(' ', ' '), { releaseDelayedA: true });
+    expect(st.wizardB.damage).toBe(1);
   });
 
   it('morte simultanea = pareggio', () => {

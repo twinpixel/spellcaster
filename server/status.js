@@ -54,7 +54,9 @@ export function emptyStatus() {
     diseaseTurns: 0,
     poisonTurns: 0,
     blindnessTurns: 0,
+    blindnessQueued: 0,
     invisibilityTurns: 0,
+    invisibilityQueued: 0,
     hasteTurns: 0,
     hasteQueued: 0,
     delayedArmed: 0,
@@ -76,7 +78,9 @@ export function clearEnchantments(wizard, { keepResists = false } = {}) {
   s.diseaseTurns = 0;
   s.poisonTurns = 0;
   s.blindnessTurns = 0;
+  s.blindnessQueued = 0;
   s.invisibilityTurns = 0;
+  s.invisibilityQueued = 0;
   s.hasteTurns = 0;
   s.hasteQueued = 0;
   s.delayedArmed = 0;
@@ -106,7 +110,9 @@ export function statusJson(status) {
     diseaseTurns: status.diseaseTurns || 0,
     poisonTurns: status.poisonTurns || 0,
     blindnessTurns: status.blindnessTurns || 0,
+    blindnessQueued: status.blindnessQueued || 0,
     invisibilityTurns: status.invisibilityTurns || 0,
+    invisibilityQueued: status.invisibilityQueued || 0,
     hasteTurns: status.hasteTurns || 0,
     hasteQueued: status.hasteQueued || 0,
     delayedArmed: status.delayedArmed || 0,

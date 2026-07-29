@@ -541,12 +541,17 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     }
   }
 
-  // Delayed effect: next non-delayed spell by caster is banked
+  // Delayed effect: il prossimo incantesimo del lanciatore va «in banca».
+  // «provided it is on this turn or one of the next 3»: vale anche per un
+  // secondo incantesimo completato nello stesso turno del delayed effect.
+  const delayedArmedThisTurn = new Set(
+    active.filter((c) => !c.cancelled && c.spell === 'delayedEffect').map((c) => c.casterId),
+  );
   for (const c of active) {
     if (c.cancelled) continue;
     if (c.spell === 'delayedEffect' || c.spell === 'permanency') continue;
     const caster = wizardById(state, c.casterId);
-    if (!caster?.status.delayedArmed) continue;
+    if (!caster?.status.delayedArmed && !delayedArmedThisTurn.has(c.casterId)) continue;
     if (caster.status.delayedBank) continue;
     caster.status.delayedBank = {
       spell: c.spell,
@@ -589,12 +594,35 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     if (w.status.protectionFromEvilTurns > 0) shielded.add(w.id);
   }
 
+  // Time stop: nel turno extra «all non-affected beings have no resistance to
+  // any form of attack», comprese le resistenze a caldo e freddo.
+  const timeStoppedFor = choices.timeStoppedFor || null;
+  /** true se in questo turno il soggetto non può contare su resistenze/scudi. */
+  const noDefence = (id) => !!timeStoppedFor && id !== timeStoppedFor;
+  if (timeStoppedFor) {
+    for (const w of [state.wizardA, state.wizardB]) {
+      if (noDefence(w.id)) shielded.delete(w.id);
+    }
+  }
+  const resists = (wizard, key) => !!wizard?.status[key] && !noDefence(wizard.id);
+
   const monsterLog = {}; // id -> { label, text }
   for (const m of state.monsters || []) {
     monsterLog[m.id] = { label: m.label, text: m.alive ? '—' : '☠' };
   }
 
   const pendingSummons = [];
+  /**
+   * L’ordine di risoluzione segue gli esempi del regolamento:
+   * 1) enchantment e protezioni, 2) remove enchantment / dispel,
+   * 3) evocazioni, 4) danni, 5) tempeste, 6) attacchi dei mostri, 7) cure.
+   * Così «resist heat + fireball» salva la vittima, mentre
+   * «remove enchantment + fireball» su chi già resisteva la fa arrostire.
+   */
+  const pendingClears = [];
+  const pendingDamage = [];
+  /** Maghi bersaglio di remove enchantment: i mostri che creano ora muoiono. */
+  const removeEnchantmentOnWizard = new Set();
   /** Le cure valgono «come se il danno non fosse stato inflitto»: si applicano dopo. */
   const deferredCures = [];
   let destroyAllMonstersAfterAttack = hasDispel;
@@ -606,37 +634,45 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
 
     switch (c.spell) {
       case 'missile':
-        resolveTargetHit(state, c.targetId, 1, shielded);
+        pendingDamage.push(() => resolveTargetHit(state, c.targetId, 1, shielded));
         break;
       case 'fingerOfDeath':
-        if (isWizardId(c.targetId)) applyDamage(targetWizard, 999);
-        else hurtMonster(monsterById(state, c.targetId), 999);
+        pendingDamage.push(() => {
+          if (isWizardId(c.targetId)) applyDamage(targetWizard, 999);
+          else hurtMonster(monsterById(state, c.targetId), 999);
+        });
         break;
       case 'lightningBoltLong':
-        resolveTargetHit(state, c.targetId, 5, shielded, { ignoreShield: true });
+        pendingDamage.push(() =>
+          resolveTargetHit(state, c.targetId, 5, shielded, { ignoreShield: true }));
         break;
       case 'lightningBoltShort':
         if (caster && !caster.usedShortLightning) {
           caster.usedShortLightning = true;
-          resolveTargetHit(state, c.targetId, 5, shielded, { ignoreShield: true });
+          pendingDamage.push(() =>
+            resolveTargetHit(state, c.targetId, 5, shielded, { ignoreShield: true }));
         }
         break;
       case 'causeLightWounds':
-        resolveTargetHit(state, c.targetId, 2, shielded, { ignoreShield: true });
+        pendingDamage.push(() =>
+          resolveTargetHit(state, c.targetId, 2, shielded, { ignoreShield: true }));
         break;
       case 'causeHeavyWounds':
-        resolveTargetHit(state, c.targetId, 3, shielded, { ignoreShield: true });
+        pendingDamage.push(() =>
+          resolveTargetHit(state, c.targetId, 3, shielded, { ignoreShield: true }));
         break;
       case 'fireball':
-        if (isWizardId(c.targetId)) {
-          if (targetWizard && !targetWizard.status.resistHeat) applyDamage(targetWizard, 5);
-        } else {
+        pendingDamage.push(() => {
+          if (isWizardId(c.targetId)) {
+            if (targetWizard && !resists(targetWizard, 'resistHeat')) applyDamage(targetWizard, 5);
+            return;
+          }
           const m = monsterById(state, c.targetId);
           if (m?.alive) {
             if (m.elementalType === 'ice') hurtMonster(m, 999);
             else hurtMonster(m, 5);
           }
-        }
+        });
         break;
       case 'fireStorm':
       case 'iceStorm':
@@ -670,16 +706,20 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         break;
       case 'resistHeat':
         if (targetWizard) targetWizard.status.resistHeat = true;
-        if (!isWizardId(c.targetId)) {
-          const m = monsterById(state, c.targetId);
-          if (m?.elementalType === 'fire') hurtMonster(m, 999);
+        else {
+          pendingDamage.push(() => {
+            const m = monsterById(state, c.targetId);
+            if (m?.elementalType === 'fire') hurtMonster(m, 999);
+          });
         }
         break;
       case 'resistCold':
         if (targetWizard) targetWizard.status.resistCold = true;
-        if (!isWizardId(c.targetId)) {
-          const m = monsterById(state, c.targetId);
-          if (m?.elementalType === 'ice') hurtMonster(m, 999);
+        else {
+          pendingDamage.push(() => {
+            const m = monsterById(state, c.targetId);
+            if (m?.elementalType === 'ice') hurtMonster(m, 999);
+          });
         }
         break;
       case 'protectionFromEvil':
@@ -692,18 +732,29 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         if (targetWizard) targetWizard.status.antiSpellNextTurn = true;
         break;
       case 'removeEnchantment':
-        if (targetWizard) clearEnchantments(targetWizard);
-        if (!isWizardId(c.targetId)) {
+        if (targetWizard) {
+          // Termina anche gli enchantment lanciati in questo stesso turno
+          pendingClears.push(() => clearEnchantments(targetWizard));
+          // «unless cast on a wizard as he creates a monster»
+          removeEnchantmentOnWizard.add(targetWizard.id);
+        } else {
           const m = monsterById(state, c.targetId);
           if (m?.alive) m._dieAfterAttack = true;
         }
         break;
       case 'dispelMagic':
         destroyAllMonstersAfterAttack = true;
-        for (const w of [state.wizardA, state.wizardB]) clearEnchantments(w);
+        pendingClears.push(() => {
+          for (const w of [state.wizardA, state.wizardB]) clearEnchantments(w);
+        });
         break;
       case 'amnesia':
         if (targetWizard) targetWizard.status.amnesia = true;
+        else {
+          // «If the subject is a monster it will attack whoever it attacked this turn»
+          const m = monsterById(state, c.targetId);
+          if (m) m.amnesia = true;
+        }
         break;
       case 'confusion':
         if (targetWizard) targetWizard.status.confusion = true;
@@ -740,7 +791,8 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
           targetWizard.status.paralysis = { hand, forced: paralyzedPosition(current) };
         } else {
           const m = monsterById(state, c.targetId);
-          if (m) m.paralyzedPending = true;
+          // «excluding elementals which are unaffected»
+          if (m && !m.elementalType) m.paralyzedPending = true;
         }
         break;
       case 'fear':
@@ -753,14 +805,15 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         if (targetWizard) targetWizard.status.poisonTurns = 6;
         break;
       case 'blindness':
-        if (targetWizard) targetWizard.status.blindnessTurns = 3;
+        // «For the next 3 turns not including the one in which the spell was cast»
+        if (targetWizard) targetWizard.status.blindnessQueued = 3;
         else {
           const m = monsterById(state, c.targetId);
           if (m?.alive) m._dieAfterAttack = true;
         }
         break;
       case 'invisibility':
-        if (targetWizard) targetWizard.status.invisibilityTurns = 3;
+        if (targetWizard) targetWizard.status.invisibilityQueued = 3;
         else {
           const m = monsterById(state, c.targetId);
           if (m?.alive) m._dieAfterAttack = true;
@@ -773,10 +826,9 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
         if (targetWizard) state.timeStopFor = targetWizard.id;
         break;
       case 'delayedEffect':
-        if (caster) {
-          caster.status.delayedArmed = 3;
-          caster.status.delayedBank = null;
-        }
+        // Un mago può avere un solo incantesimo in banca alla volta: se ce n’è
+        // già uno (anche messo da parte proprio ora) il delayed effect non riarma.
+        if (caster && !caster.status.delayedBank) caster.status.delayedArmed = 3;
         break;
       case 'permanency':
         if (caster) caster.status.permanencyArmed = 3;
@@ -793,18 +845,37 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     }
   }
 
+  // Remove enchantment / dispel magic: tolgono anche gli enchantment appena
+  // applicati in questo turno, ma prima che i danni si risolvano.
+  for (const clear of pendingClears) clear();
+
   // Create summons (subject = targetId = controller)
   const newMonsters = [];
   for (const c of pendingSummons) {
-    const controllerId = isWizardId(c.targetId) ? c.targetId : c.casterId;
+    // «cannot be cast at an elemental, and if cast at something which doesn't
+    //  exist, the spell has no effect»; su un mostro comanda il *suo* controllore
+    let controllerId = null;
+    if (isWizardId(c.targetId)) {
+      controllerId = c.targetId;
+    } else {
+      const host = monsterById(state, c.targetId);
+      if (!host || !host.alive || host.elementalType) continue;
+      controllerId = host.controllerId;
+    }
     const elemType =
       c.casterId === state.wizardA.id ? choices.elementalTypeA : choices.elementalTypeB;
     const m = createMonster(state, c.spell, controllerId, elemType || 'fire');
     if (m) {
       newMonsters.push(m);
       monsterLog[m.id] = { label: m.label, text: 'evocato' };
+      // Remove enchantment sul mago che lo crea distrugge il mostro appena nato
+      if (removeEnchantmentOnWizard.has(controllerId)) m._dieAfterAttack = true;
     }
   }
+
+  // I danni si applicano dopo evocazioni e rimozioni (il bersaglio può essere
+  // «l’elementale che sta per creare»)
+  for (const hit of pendingDamage) hit();
 
   // Due elementali dello stesso tipo si fondono in uno solo di forza normale
   for (const kind of ['fire', 'ice']) {
@@ -853,7 +924,7 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       monsterLog[m.id] = { label: m.label, text: 'tempesta☠' };
     }
     for (const w of [state.wizardA, state.wizardB]) {
-      if (w.status[resistKey]) continue;
+      if (resists(w, resistKey)) continue;
       if (countered.has(w.id) || stormImmune.has(w.id)) continue;
       applyDamage(w, 5);
     }
@@ -886,7 +957,7 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
       const resistKey = m.elementalType === 'fire' ? 'resistHeat' : 'resistCold';
       const hits = [];
       for (const w of [state.wizardA, state.wizardB]) {
-        if (w.status[resistKey] || shielded.has(w.id)) continue;
+        if (resists(w, resistKey) || shielded.has(w.id)) continue;
         if (w.status.invisibilityTurns > 0 && m.controllerId !== w.id) continue;
         applyDamage(w, m.attack);
         hits.push(w.name);
@@ -906,6 +977,12 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     // Newly summoned without explicit order: attack opponent of controller
     if (newMonsters.includes(m) && !(orders || []).some((o) => o.monsterId === m.id)) {
       targetId = foe(m.controllerId);
+    }
+
+    // Amnesia su un mostro: «it will attack whoever it attacked this turn»
+    if (m.amnesia) {
+      if (m.lastTargetId) targetId = m.lastTargetId;
+      m.amnesia = false;
     }
 
     if (m.confused) {
@@ -930,6 +1007,7 @@ export function resolveEffects(state, castsA, castsB, actionA, actionB, choices 
     }
 
     resolveTargetHit(state, targetId, m.attack, shielded, { ignoreShield: true });
+    m.lastTargetId = targetId;
     const name =
       isWizardId(targetId)
         ? (targetId === state.wizardA.id ? state.wizardA.name : state.wizardB.name)
@@ -1030,9 +1108,16 @@ export function playTurn(state, actionA, actionB, choices = {}) {
   state.turn += 1;
 
   for (const w of [state.wizardA, state.wizardB]) {
-    if (w.status.hasteQueued > 0) {
-      w.status.hasteTurns = w.status.hasteQueued;
-      w.status.hasteQueued = 0;
+    // Effetti che partono dal turno successivo a quello del lancio
+    for (const [queued, active] of [
+      ['hasteQueued', 'hasteTurns'],
+      ['blindnessQueued', 'blindnessTurns'],
+      ['invisibilityQueued', 'invisibilityTurns'],
+    ]) {
+      if (w.status[queued] > 0) {
+        w.status[active] = w.status[queued];
+        w.status[queued] = 0;
+      }
     }
     if (w.status.antiSpellNextTurn) {
       w.leftHand.symbols = [];
@@ -1332,6 +1417,7 @@ export function submitTurnToRoom(room, payload = {}) {
   // Time-stop solo turn: only the subject submits; opponent auto-nothings
   if (extraFor && playerId === extraFor) {
     const other = extraFor === 'a' ? 'b' : 'a';
+    room.timeStopTurnFor = extraFor;
     if (!room.submitted[other]) {
       room.submitted[other] = {
         action: parseTurn(' ', ' '),
@@ -1358,6 +1444,8 @@ export function submitTurnToRoom(room, payload = {}) {
   const subA = room.submitted[ids[0]];
   const subB = room.submitted[ids[1]];
   room.submitted = {};
+  const timeStoppedFor = room.timeStopTurnFor || null;
+  room.timeStopTurnFor = null;
 
   // Charm forced gesture: controller sends charmForced targeting the victim
   const charmForcedA =
@@ -1398,6 +1486,7 @@ export function submitTurnToRoom(room, payload = {}) {
     right2B: subB.right2,
     releaseDelayedA: subA.releaseDelayed,
     releaseDelayedB: subB.releaseDelayed,
+    timeStoppedFor,
   });
   room.lastTurnCasts = [...result.castsA, ...result.castsB];
   room.history = room.history || [];

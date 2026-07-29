@@ -1026,6 +1026,45 @@ html, body {
   }
 }
 
+/* Pulsante «ⓘ» nella barra in alto */
+.btn-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 6px 8px;
+  min-width: 0;
+}
+
+.info-body {
+  gap: 10px;
+  text-align: center;
+}
+
+.info-line {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.info-author strong {
+  font-family: 'Cinzel', Georgia, serif;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+
+.info-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(232, 195, 106, 0.45);
+  word-break: break-all;
+}
+
+.info-link:hover,
+.info-link:focus-visible {
+  color: var(--text);
+  border-bottom-color: currentColor;
+}
+
 .spell-video-backdrop {
   align-items: center;
   z-index: 90;

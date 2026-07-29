@@ -55,6 +55,11 @@ const SESSION_KEY = 'spellcaster.session';
 const NICK_KEY = 'spellcaster.nickname';
 const SPELL_VIDEO_KEY = 'spellcaster.spellVideos';
 
+const AUTHOR_NAME = 'Andrea Poltronieri';
+const AUTHOR_URL = 'https://www.nadreapoltronieri.name';
+/** Testo mostrato per il link (senza schema, come lo si scrive a voce). */
+const AUTHOR_URL_LABEL = 'www.nadreapoltronieri.name';
+
 /** Titoli come in docs/SPELL_VIDEO_PROMPTS.md (slug = lower + spazi→trattini). */
 const SPELL_VIDEO_TITLE = {
   shield: 'Shield',
@@ -883,8 +888,11 @@ function statusBadges(st, { mine = false } = {}) {
   if (st.diseaseTurns > 0) badges.push([`Disease ${st.diseaseTurns}`, 'bad']);
   if (st.poisonTurns > 0) badges.push([`Poison ${st.poisonTurns}`, 'bad']);
   if (st.blindnessTurns > 0) badges.push([`Blind ${st.blindnessTurns}`, 'warn']);
+  else if (st.blindnessQueued > 0) badges.push([`Blind ${st.blindnessQueued}→`, 'warn']);
   if (st.invisibilityTurns > 0) badges.push([`Invis ${st.invisibilityTurns}`, 'ok']);
+  else if (st.invisibilityQueued > 0) badges.push([`Invis ${st.invisibilityQueued}→`, 'ok']);
   if (st.hasteTurns > 0) badges.push([`Haste ${st.hasteTurns}`, 'ok']);
+  else if (st.hasteQueued > 0) badges.push([`Haste ${st.hasteQueued}→`, 'ok']);
   if (st.delayedArmed > 0) badges.push([`Delayed ${st.delayedArmed}`, 'ok']);
   if (st.delayedBank) badges.push([`Banca: ${st.delayedBank.spell}`, 'ok']);
   if (st.permanencyArmed > 0) badges.push([`Permanency ${st.permanencyArmed}`, 'ok']);
@@ -1021,6 +1029,42 @@ function restartNewGame() {
   leaveToHome();
 }
 
+/** Dialog «Informazioni»: crediti, autore e regolamento di riferimento. */
+function showInfoModal() {
+  const existing = document.getElementById('info-modal');
+  if (existing) existing.remove();
+
+  const wrap = document.createElement('div');
+  wrap.id = 'info-modal';
+  wrap.className = 'modal-backdrop';
+  wrap.innerHTML = `
+    <div class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
+      <div class="modal-title" id="info-modal-title">Spellcaster</div>
+      <div class="modal-body info-body">
+        <p class="info-line">Duello di gesti magici, dal gioco <em>Waving Hands</em> di Richard Bartle.</p>
+        <p class="info-line info-author">
+          Sviluppato da <strong>${escapeHtml(AUTHOR_NAME)}</strong>
+        </p>
+        <p class="info-line">
+          <a class="info-link" id="info-author-link" href="${escapeHtml(AUTHOR_URL)}"
+             target="_blank" rel="noopener noreferrer">${escapeHtml(AUTHOR_URL_LABEL)}</a>
+        </p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="info-close">Chiudi</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+
+  const close = () => wrap.remove();
+  wrap.querySelector('#info-close').onclick = close;
+  wrap.addEventListener('click', (e) => {
+    if (e.target === wrap) close();
+  });
+  return wrap;
+}
+
 function renderAppBar() {
   titleEl.textContent = 'Spellcaster';
   leftBar.innerHTML = '';
@@ -1062,6 +1106,16 @@ function renderAppBar() {
     setSpellVideosPref(e.target.checked);
   });
   rightBar.appendChild(videoToggle);
+
+  const info = document.createElement('button');
+  info.className = 'btn btn-ghost btn-icon';
+  info.id = 'btn-info';
+  info.type = 'button';
+  info.textContent = 'ⓘ';
+  info.title = `Informazioni · sviluppato da ${AUTHOR_NAME}`;
+  info.setAttribute('aria-label', 'Informazioni');
+  info.onclick = () => showInfoModal();
+  rightBar.appendChild(info);
 
   if (state.view === 'duel') {
     const ref = document.createElement('button');
