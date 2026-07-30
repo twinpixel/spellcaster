@@ -22,6 +22,33 @@ GESTURE_BY_LABEL['—'] = HAND_OPTIONS.find((o) => o.code === ' ');
 const SESSION_KEY = 'spellcaster.session';
 const NICK_KEY = 'spellcaster.nickname';
 const SPELL_VIDEO_KEY = 'spellcaster.spellVideos';
+const SEAT_KEY = 'spellcaster.seat.';
+
+/** Messaggi per i rifiuti del server all'ingresso in partita. */
+const JOIN_ERRORS = {
+  game_finished: 'Questa partita è già finita: chiedi un nuovo invito.',
+  seat_taken: 'Questa partita ha già i suoi due giocatori.',
+  not_found: 'Partita non trovata: il link non è più valido.',
+  invalid_player: 'Link d’invito non valido.',
+};
+
+/** Il token dice al server «il posto è mio», così un ricarico non ti esclude. */
+function loadSeatToken(gameId) {
+  try {
+    return localStorage.getItem(SEAT_KEY + gameId) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSeatToken(gameId, token) {
+  if (!token) return;
+  try {
+    localStorage.setItem(SEAT_KEY + gameId, token);
+  } catch {
+    // modalità privata o quota piena: si perde solo la possibilità di rientrare
+  }
+}
 
 const AUTHOR_NAME = 'Andrea Poltronieri';
 const AUTHOR_URL = 'https://www.andreapoltronieri.name';
@@ -496,6 +523,7 @@ async function createGame({ solo = false, wizard = null } = {}) {
         method: 'POST',
         body: JSON.stringify({ playerId: 'b', name: foe.name }),
       });
+      saveSeatToken(game.id, game.playerToken);
     } else {
       state.aiWizard = null;
       ensureAiBook();
@@ -534,8 +562,9 @@ async function joinGame(gameId) {
   try {
     const game = await api(`/games/${encodeURIComponent(gameId)}/join`, {
       method: 'POST',
-      body: JSON.stringify({ playerId: 'b', name: nick }),
+      body: JSON.stringify({ playerId: 'b', name: nick, token: loadSeatToken(gameId) }),
     });
+    saveSeatToken(gameId, game.playerToken);
     state.game = game;
     state.playerId = 'b';
     state.solo = false;
@@ -550,9 +579,11 @@ async function joinGame(gameId) {
     syncPoll();
     toast('Sei entrato nella partita');
   } catch (e) {
-    state.error = String(e.message || e);
+    const code = String(e.message || e);
+    state.error = JOIN_ERRORS[code] || code;
     state.view = 'welcome';
     state.pendingJoinId = null;
+    clearJoinFromUrl();
   } finally {
     state.loading = false;
     render();
@@ -623,33 +654,6 @@ async function autoPlayAi(game) {
     method: 'POST',
     body: JSON.stringify({ playerId: opponent, ...turn }),
   });
-}
-
-async function switchToAiOpponent(wizard = null) {
-  if (!state.game || state.solo) return;
-  const foe = wizard || aiRandomWizard();
-  state.loading = true;
-  state.error = null;
-  render();
-  try {
-    const game = await api(`/games/${encodeURIComponent(state.game.id)}/join`, {
-      method: 'POST',
-      body: JSON.stringify({ playerId: 'b', name: foe.name }),
-    });
-    state.game = game;
-    state.solo = true;
-    state.aiWizard = foe.name;
-    state.aiLevel = foe.level;
-    ensureAiBook();
-    saveSession();
-    toast(`Partita contro ${foe.name} · ${aiTierByLevel(foe.level).label}`);
-    syncPoll();
-  } catch (e) {
-    state.error = String(e.message || e);
-  } finally {
-    state.loading = false;
-    render();
-  }
 }
 
 /** Azzera le scelte del turno appena risolto (mani, ordini, bersagli). */

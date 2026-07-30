@@ -1355,15 +1355,41 @@ export function snapshot(room) {
   };
 }
 
-export function joinRoom(room, playerId, name) {
+/** Segreto che identifica il posto di un giocatore, per poter rientrare. */
+function newSeatToken() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/**
+ * Entra in partita.
+ * Rifiuta chi arriva a partita conclusa (`game_finished`) e chi trova il posto
+ * già occupato (`seat_taken`): il link d'invito vale per un solo avversario.
+ * Chi era già dentro rientra passando il `token` ricevuto al primo ingresso,
+ * così ricaricare la pagina o riaprire il link non chiude fuori nessuno.
+ */
+export function joinRoom(room, playerId, name, token = null) {
   if (playerId !== 'a' && playerId !== 'b') throw new Error('invalid_player');
+  if (room.state.finished) throw new Error('game_finished');
+
   room.joined = room.joined || { a: false, b: false };
+  room.seats = room.seats || {};
+  const held = room.seats[playerId] || null;
+
+  if (room.joined[playerId] && (!held || token !== held)) {
+    throw new Error('seat_taken');
+  }
+
   room.joined[playerId] = true;
+  room.seats[playerId] = held || newSeatToken();
   if (name && typeof name === 'string') {
     const w = playerId === 'a' ? room.state.wizardA : room.state.wizardB;
     w.name = name.trim().slice(0, 40) || w.name;
   }
-  return snapshot(room);
+  // Il token torna solo a chi entra: lo snapshot pubblico non lo contiene mai
+  return { ...snapshot(room), playerToken: room.seats[playerId] };
 }
 
 export function submitTurnToRoom(room, payload = {}) {
@@ -1519,10 +1545,10 @@ export function createGameService() {
     return room ? snapshot(room) : null;
   }
 
-  function joinGame(id, playerId, name) {
+  function joinGame(id, playerId, name, token) {
     const room = games.get(id);
     if (!room) throw new Error('not_found');
-    return joinRoom(room, playerId, name);
+    return joinRoom(room, playerId, name, token);
   }
 
   function submitTurn(id, payload) {

@@ -75,7 +75,7 @@ export class GameRoom {
         return jsonResponse({ error: 'invalid_json' }, 400);
       }
       try {
-        const snap = joinRoom(this.room, body.playerId, body.name);
+        const snap = joinRoom(this.room, body.playerId, body.name, body.token);
         await this.save();
         return jsonResponse(snap);
       } catch (e) {

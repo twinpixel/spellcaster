@@ -864,6 +864,49 @@ describe('haste, time stop e fine partita', () => {
 // --- room service ----------------------------------------------------------
 
 describe('room service', () => {
+  it('rifiuta chi arriva a partita finita', () => {
+    const room = createRoom('rf1');
+    joinRoom(room, 'b', 'Beta');
+    submitTurnToRoom(room, { playerId: 'a', left: 'P', right: 'P' }); // resa
+    submitTurnToRoom(room, { playerId: 'b', left: ' ', right: ' ' });
+    expect(room.state.finished).toBe(true);
+    expect(() => joinRoom(room, 'b', 'Terzo')).toThrow(/game_finished/);
+  });
+
+  it('rifiuta un terzo giocatore: il posto è già occupato', () => {
+    const room = createRoom('rf2');
+    const primo = joinRoom(room, 'b', 'Beta');
+    expect(primo.playerToken).toBeTruthy();
+
+    expect(() => joinRoom(room, 'b', 'Intruso')).toThrow(/seat_taken/);
+    expect(() => joinRoom(room, 'b', 'Intruso', 'token-sbagliato')).toThrow(/seat_taken/);
+    // e il nome del giocatore legittimo non è stato toccato
+    expect(room.state.wizardB.name).toBe('Beta');
+  });
+
+  it('chi era già dentro rientra col proprio token', () => {
+    const room = createRoom('rf3');
+    const { playerToken } = joinRoom(room, 'b', 'Beta');
+    submitTurnToRoom(room, { playerId: 'a', left: 'S', right: ' ' });
+    submitTurnToRoom(room, { playerId: 'b', left: 'W', right: ' ' });
+
+    const again = joinRoom(room, 'b', 'Beta', playerToken);
+    expect(again.turn).toBe(1); // ritrova la partita dov'era
+    expect(again.playerToken).toBe(playerToken); // stesso posto, stesso token
+  });
+
+  it('anche il posto dell’ospitante è protetto', () => {
+    const room = createRoom('rf4'); // createRoom segna «a» come già entrato
+    expect(() => joinRoom(room, 'a', 'Ladro')).toThrow(/seat_taken/);
+  });
+
+  it('lo snapshot pubblico non contiene mai i token', () => {
+    const room = createRoom('rf5');
+    joinRoom(room, 'b', 'Beta');
+    expect(snapshot(room).playerToken).toBeUndefined();
+    expect(JSON.stringify(snapshot(room))).not.toContain(room.seats.b);
+  });
+
   it('valida il giocatore in join e submit', () => {
     const room = createRoom('r1');
     expect(() => joinRoom(room, 'c')).toThrow(/invalid_player/);
@@ -873,9 +916,9 @@ describe('room service', () => {
 
   it('il nome viene ripulito e troncato', () => {
     const room = createRoom('r2');
-    joinRoom(room, 'b', `  ${'x'.repeat(60)}  `);
+    const { playerToken } = joinRoom(room, 'b', `  ${'x'.repeat(60)}  `);
     expect(room.state.wizardB.name).toHaveLength(40);
-    joinRoom(room, 'b', '   ');
+    joinRoom(room, 'b', '   ', playerToken);
     expect(room.state.wizardB.name).toHaveLength(40); // nome vuoto: resta il precedente
   });
 

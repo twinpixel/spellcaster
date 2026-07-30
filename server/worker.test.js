@@ -220,6 +220,40 @@ describe('worker · ciclo di vita partita', () => {
     expect((await json(broken)).error).toBe('invalid_json');
   });
 
+  it('rifiuta l’ingresso a partita finita e a posto occupato', async () => {
+    const env = makeEnv();
+    const game = await newGame(env);
+
+    const first = await json(await post(env, `/games/${game.id}/join`, { playerId: 'b', name: 'Beta' }));
+    expect(first.playerToken).toBeTruthy();
+
+    const intruso = await post(env, `/games/${game.id}/join`, { playerId: 'b', name: 'Intruso' });
+    expect(intruso.status).toBe(400);
+    expect((await json(intruso)).error).toBe('seat_taken');
+
+    // ma il legittimo rientra col token
+    const back = await post(env, `/games/${game.id}/join`,
+      { playerId: 'b', name: 'Beta', token: first.playerToken });
+    expect(back.status).toBe(200);
+
+    // a partita finita nessuno entra più
+    await post(env, `/games/${game.id}/turn`, { playerId: 'a', left: 'P', right: 'P' });
+    await post(env, `/games/${game.id}/turn`, { playerId: 'b', left: ' ', right: ' ' });
+    const dopo = await post(env, `/games/${game.id}/join`,
+      { playerId: 'b', name: 'Beta', token: first.playerToken });
+    expect(dopo.status).toBe(400);
+    expect((await json(dopo)).error).toBe('game_finished');
+  });
+
+  it('il token non compare nello snapshot pubblico', async () => {
+    const env = makeEnv();
+    const game = await newGame(env);
+    const { playerToken } = await json(
+      await post(env, `/games/${game.id}/join`, { playerId: 'b', name: 'Beta' }));
+    const snap = await (await call(env, `/games/${game.id}`)).text();
+    expect(snap).not.toContain(playerToken);
+  });
+
   it('rifiuta join con playerId non valido', async () => {
     const env = makeEnv();
     const game = await newGame(env);
